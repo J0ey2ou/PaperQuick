@@ -8,6 +8,10 @@ Windows 本地小工具 + Edge / Chrome 扩展。支持论文标题、DOI、arXi
 
 ![浏览器扩展查询结果：公开论文示例](docs/images/browser.png)
 
+![选词查询流程动图](docs/images/demo.gif)
+
+动图使用公开论文固定数据演示选词查询流程，未展示原生右键菜单，演示等待不代表实际网速。[微信推送文案及素材](推送文案.md)；下载推送 HTML 后打开，可一键复制图文，也可单独保存截图 / 动图。
+
 ## 三种用法
 
 ### 1. 复制 → 粘贴并查找
@@ -96,3 +100,5 @@ A single DOI opens its publisher / DOI page immediately; an arXiv ID opens its P
 The app returns download links; the browser handles files. It needs internet access and sends titles / DOIs to literature services. It does not keep query history, track the mouse or start automatically with Windows. The hotkey copies selected text into your clipboard. Scanned / protected PDFs and elevated windows may not support copying.
 
 Optional Unpaywall email and shortcut preferences are stored locally in `settings.json` and `shortcut.json`; neither is shipped. Google Scholar receives a query only when you click its search button. Source run / build commands are shown above. Screenshots demonstrate a public paper; response time depends on the network.
+
+The GIF demonstrates the selection-to-results flow with a public-paper fixture. The native context menu is not captured, and the timing is not a network benchmark. [Promotion materials](推送文案.md) include a self-contained HTML page with rich-text copying and downloadable screenshots / GIF.

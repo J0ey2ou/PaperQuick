@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "文献直达 · 右键查原文",
+  "version": "2.3.0",
+  "description": "选中论文标题或 DOI，右键查询并打开原文；读取已打开推送中的文献信息。",
+  "permissions": ["contextMenus", "activeTab", "scripting", "storage"],
+  "host_permissions": ["https://api.crossref.org/*", "https://www.ebi.ac.uk/*", "https://export.arxiv.org/*", "https://api.semanticscholar.org/*", "https://api.unpaywall.org/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_title": "查找当前页面中的论文"},
+  "options_page": "results.html",
+  "icons": {"16": "icon16.png", "48": "icon48.png", "128": "icon128.png"}
+}

@@ -1,0 +1,12 @@
+__pycache__/
+build/
+release/
+*.exe
+settings.json
+shortcut-status.json
+shortcut.json
+shortcut.json.tmp
+*-check.json
+bundle-check*.json
+extension-preview.png
+*.zip

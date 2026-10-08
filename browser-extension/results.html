@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>文献直达 · 查找原文</title><link rel="stylesheet" href="style.css"></head><body>
+<main><header><h1>文献直达</h1><span>选中文字，右键到原文</span></header>
+<section class="input"><label for="query">论文标题、DOI 或 arXiv 链接</label><textarea id="query" rows="3" placeholder="粘贴完整英文论文标题或 DOI"></textarea><div class="bar"><label><input type="checkbox" id="auto" checked>匹配明确时自动打开原文</label><button id="scholar">直接学术搜索 ↗</button><button id="search">查找原文</button></div></section>
+<p id="status" role="status" aria-live="polite">准备就绪</p><div id="results"></div>
+<details><summary>可选设置与使用说明</summary><p>无需配置即可查询。填写真实联系邮箱可启用 Unpaywall，增加开放版本覆盖；邮箱随 DOI 查询发送到该服务，仅保存在浏览器扩展设置中。</p><label>Unpaywall 联系邮箱 <input id="email" type="email" placeholder="可留空"></label><button id="save">保存</button><p>公众号先在浏览器打开并完成验证，再右键查询当前页面。此扩展仅在你点击菜单或工具按钮后读取页面 / 选中文字，不保存查询历史。标题 / DOI 会发送到文献服务。</p><p>同名、近似或多个 DOI 时会展示候选；DOI 先打开出版社入口，arXiv 编号先打开 PDF；标题匹配后优先开放原文。链接陆续显示，也可点击“直接学术搜索”将当前标题 / DOI 发送到 Google Scholar。开放版本可能为预印本或作者稿，付费论文可能需要机构权限。</p></details>
+</main><script type="module" src="results.js"></script></body></html>

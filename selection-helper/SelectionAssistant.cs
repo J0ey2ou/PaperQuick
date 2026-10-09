@@ -37,6 +37,10 @@ internal static class Program {
         try { Native.SetProcessDPIAware(); } catch { }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        if (args.Length > 0 && args[0] == "--exit") {
+            try { using (var signal = System.Threading.EventWaitHandle.OpenExisting("Local\\PaperQuick.SelectionExit")) signal.Set(); } catch (System.Threading.WaitHandleCannotBeOpenedException) { }
+            return;
+        }
         if (args.Length == 2 && args[0] == "--verify-helper") {
             bool quote = Quote("a \"b\" c\\") == "\"a \\\"b\\\" c\\\\\"";
             bool abi = Marshal.SizeOf(typeof(Native.Input)) == (IntPtr.Size == 8 ? 40 : 28);
@@ -84,7 +88,8 @@ internal sealed class Assistant : ApplicationContext {
     readonly Dispatcher dispatcher = new Dispatcher();
     readonly NotifyIcon tray = new NotifyIcon();
     readonly Timer timer = new Timer { Interval = 40 };
-    readonly Timer configTimer = new Timer { Interval = 700 };
+    readonly Timer configTimer = new Timer { Interval = 1500 };
+    readonly System.Threading.EventWaitHandle exitSignal = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, "Local\\PaperQuick.SelectionExit");
     readonly JavaScriptSerializer json = new JavaScriptSerializer();
     readonly string configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "shortcut.json");
     string observedConfig = "";
@@ -117,17 +122,23 @@ internal sealed class Assistant : ApplicationContext {
         menu.Items.Add(shortcutItem);
         menu.Items.Add("自定义快捷键…", null, delegate { ConfigureShortcut(); });
         menu.Items.Add("打开文献直达", null, delegate { Process.Start(new ProcessStartInfo(app) { UseShellExecute = true }); });
+        menu.Items.Add("文献分类", null, delegate { Launch("--library"); });
+        menu.Items.Add("设置 / 登录 Windows 后启动", null, delegate { Launch("--settings"); });
         menu.Items.Add("使用说明", null, delegate {
             string path = Path.Combine(Path.GetDirectoryName(app), "右键插件安装.html");
             if (File.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         });
-        menu.Items.Add("退出快捷键助手", null, delegate { ExitThread(); });
-        tray.Icon = System.Drawing.SystemIcons.Information;
+        menu.Items.Add("退出程序", null, delegate { Launch("--quit"); });
+        try { tray.Icon = System.Drawing.Icon.ExtractAssociatedIcon(app); } catch { tray.Icon = System.Drawing.SystemIcons.Information; }
         tray.Text = "文献直达 · " + shortcut;
         tray.ContextMenuStrip = menu;
         tray.Visible = true;
+        tray.DoubleClick += delegate { Launch(""); };
+        Heartbeat();
         timer.Tick += Tick;
         configTimer.Tick += delegate {
+            if (exitSignal.WaitOne(0)) { ExitThread(); return; }
+            Heartbeat();
             if (stage != 0) return;
             string desired = ReadConfig();
             if (desired == observedConfig) return;
@@ -140,6 +151,9 @@ internal sealed class Assistant : ApplicationContext {
         UpdateStatus();
         if (!registered) Error("可用的快捷键都被其他软件占用。请使用浏览器右键菜单，或手动复制后粘贴查询。", "快捷键未能启用");
     }
+
+    void Launch(string arguments) { Process.Start(new ProcessStartInfo(app, arguments) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(app) }); }
+    void Heartbeat() { try { string folder = Path.Combine(Path.GetDirectoryName(app), "runtime"); Directory.CreateDirectory(folder); File.WriteAllText(Path.Combine(folder, "tray-ready"), Process.GetCurrentProcess().Id.ToString()); } catch { } }
 
     string ReadConfig() {
         try { var data = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(configPath)); return Convert.ToString(data["shortcut"]); }
@@ -248,6 +262,7 @@ internal sealed class Assistant : ApplicationContext {
         configTimer.Stop(); configTimer.Dispose();
         if (registered) Native.UnregisterHotKey(dispatcher.Handle, hotkeyId);
         tray.Visible = false; tray.Dispose(); dispatcher.Dispose();
+        exitSignal.Dispose();
         base.ExitThreadCore();
     }
 }

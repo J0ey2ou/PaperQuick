@@ -1,104 +1,107 @@
-# 文献直达 · PaperQuick
+# 文献直达 · PaperQuick 3.1
 
-**导师发来一段引用，合作者转来一篇推送——选中论文标题，直接到原文入口。**
+从导师发来的一个标题，到课题文件夹里的一篇论文，再到阅读笔记和每日回顾。Windows 本地文献工作区，连接 **查询 → 下载归档 → 分类 → 阅读批注 → 关系图谱 → 阅读总结**。
 
-Windows 本地小工具 + Edge / Chrome 扩展。支持论文标题、DOI、arXiv 编号和可读取的推送链接；自动匹配论文、查找开放 PDF / 全文，匹配明确时打开网站。**无需 Python、无需账号；支持自定义全局快捷键。**
+[下载 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/latest) · [English](#english) · [参与协作](CONTRIBUTING.md) · [微信介绍与截图](推送文案.md)
 
-[下载 Windows 软件包](https://github.com/J0ey2ou/PaperQuick/releases/latest) · [English](#english) · [完整中文说明](使用说明.md)
+无需安装 Python，无需注册账号。整理、阅读、图谱和总结在本机完成，不调用外部 AI、不需要 AI API Key；检索和下载需要联网。
 
-![浏览器扩展查询结果：公开论文示例](docs/images/browser.png)
+![阅读与本地笔记，虚构演示数据](docs/images/v31-reader.jpg)
 
-![选词查询流程动图](docs/images/demo.gif)
+## 安装与升级
 
-动图使用公开论文固定数据演示选词查询流程，未展示原生右键菜单，演示等待不代表实际网速。[微信推送文案及素材](推送文案.md)；下载推送 HTML 后打开，可一键复制图文，也可单独保存截图 / 动图。
+1. 在 Releases 下载 `PaperQuick-v3.1-Windows.zip`，解压完整文件夹到可写目录。
+2. 双击 `文献直达.exe`，保留同目录的 `全局选词助手.exe`、`browser-extension` 和说明文件。
+3. 复制一个英文标题或 DOI，在 **文献查询 → 粘贴并查找** 试用。
+4. 升级时先从托盘 **退出文献直达**，备份原文件夹，再覆盖程序文件。保留 `本地文献库`、`settings.json`、`shortcut.json`，不要用空库替换旧库。备份请在退出后复制完整 `本地文献库`，其中包含数据库及 PDF。
 
-## 三种用法
+面向 Windows 10 / 11 64 位。发布包不含个人文献或演示库；截图中的文献与阅读时长均为虚构演示。
 
-### 1. 复制 → 粘贴并查找
+## 查询：三种入口
 
-1. 下载 Release 中的 `PaperQuick-v2.3-Windows.zip`，**先解压整个软件包**。
-2. 双击 `文献直达.exe`，不需要安装 Python。
-3. 复制完整英文论文标题、DOI、arXiv 链接或推送链接，点击 **粘贴并查找**。也可以手动粘贴，点击 **查找原文** 或按 `Ctrl + Enter`。
-4. 结果陆续显示，链接出现即可点击 **开放 PDF / 开放原文 / 出版社**；可复制单个地址或全部链接。
-5. 接口较慢时，点击 **直接学术搜索**，当前标题会自动带入 Google Scholar。
+- **粘贴查询**：支持完整英文论文标题、DOI、arXiv 编号 / 链接和可读取的推送链接。粘贴后点击查找，或按 `Ctrl + Enter`。结果逐步显示，可核对作者、年份和 DOI，再打开或复制地址。
+- **Word / PDF / 微信电脑版选词**：启动全局选词助手，选中可复制文字，按托盘显示的快捷键。右上角 **设置 → 快捷键 → 保存并启用** 可修改，例如 `Ctrl + Alt + J`。默认先尝试 `Ctrl + Alt + F`；占用时使用备用键，以实际显示为准。系统范围使用快捷键，原生应用没有统一右键菜单。
+- **Edge / Chrome 右键**：打开 `edge://extensions` / `chrome://extensions`，开启开发者模式，加载解压后的 `browser-extension`。选中标题 / DOI，右键 **查找文献并打开原文**。当前推送页面也可右键查询；扩展独立运行，桌面端负责本地文献库。更新扩展后点击重新加载。
 
-### 2. Word / PDF / 微信 → 选中后按快捷键
+单个 DOI / arXiv 有直接入口时可先打开；匹配明确的标题查询可自动打开。服务缓慢时使用 **直接学术搜索**。遇到公众号验证，先在浏览器完成验证，再选中英文标题 / DOI；软件不绕过验证或机构付费权限。
 
-1. 在文献直达中点击 **全局快捷键**，助手会驻留系统托盘。也可双击 `全局选词助手.exe`。
-2. 在原软件中选中可复制的论文标题 / DOI。
-3. 按软件状态栏或托盘菜单显示的快捷键，自动查询，匹配明确时打开原文网站。
-4. **自定义快捷键**：点击主界面 **设置**，点击快捷键输入框并按下想使用的组合（也可手动填入），点击 **保存并启用**。例如 `Ctrl + Alt + J`。也可右键托盘图标 → **自定义快捷键…** → 按键 → 保存。
-5. 支持至少两个修饰键（`Ctrl` / `Alt` / `Shift`）+ 字母、数字或 `F1–F24`。设置立即生效、下次启动继续使用。发生占用时以状态栏 / 托盘显示的实际组合为准。
-6. 默认尝试 `Ctrl + Alt + F`；占用时依次尝试 `Ctrl + Alt + Shift + F`、`Ctrl + Alt + F8`。右键托盘图标可退出助手；关闭主窗口不会退出助手。
+## 下载、课题分类和命名
 
-### 3. Edge / Chrome → 选中后右键
+1. 查询结果点击 **收藏 / 下载归档**，选择或新建课题。可下载的直接 PDF 自动归档；需要网页操作时打开对应全文 / 出版社页面。
+2. **文献分类** 支持导入 PDF、导入文件夹、手工新增及编辑元数据。右键 **下载原文（打开下载页面）** 跳转对应页面；**下载并自动归档** 查找开放版本并保存。
+3. 浏览器完成机构登录并下载的 PDF，通过 **关联已下载 PDF** 或 **导入 PDF** 归档。当前不监控浏览器下载目录，不会猜测新下载文件属于哪篇文献。
+4. **命名规则** 支持 `{年份}`、`{第一作者}`、`{标题}`、`{DOI}`、`{课题}`，例如 `{年份}_{第一作者}_{标题}`。英文占位符也可用：`{year}_{author}_{title}`。
+5. 选中文献后右键 **按规则重新命名**。可使用 **选择所有文献 / 选择所有已下载文献**（全库范围，会清除筛选），或 Ctrl / Shift 多选。确认预览后批量应用各条目主课题的规则。无 PDF 条目跳过，同名文件自动加后缀；修改管理库内附件，原始导入文件不改动。
 
-1. 地址栏打开 `edge://extensions` 或 `chrome://extensions`。
-2. 开启开发者模式 → **加载已解压的扩展** → 选择软件包内的 `browser-extension` 文件夹。
-3. 选中英文论文标题 / DOI → 右键 → **查找文献并打开原文**。
-4. 在已显示正文的推送页面，也可右键 **查找当前页面中的论文**，或点击扩展图标。公众号要求验证时，先在浏览器手动完成验证，再查询。
-5. 扩展独立工作，无需开启桌面软件。更新文件后，在扩展管理页点击 **重新加载**。单位策略可能限制加载本地扩展。
+![分类和批量操作，虚构演示数据](docs/images/v31-library.jpg)
 
-## 自动打开与访问范围
+## 阅读、笔记、批注和参考文献
 
-- 单一 DOI 查询先打开 DOI / 出版社入口；arXiv 编号先打开 PDF，其他开放版本后台补齐。标题仅在候选检索阶段结束且唯一完全匹配时自动打开；同名或近似结果需要核对。
-- 开放版本来自 Europe PMC、arXiv、Semantic Scholar，可选 Unpaywall；Crossref 提供元数据和出版社入口。预印本 / 作者稿可能与正式版本不同；付费文献可能需要机构订阅，链接也可能失效。
-- 软件提供下载入口，由浏览器打开 / 下载，**不自动保存论文文件**。扫描版 PDF 需要 OCR，禁复制或管理员窗口可能无法选词。
-- 本地运行仍需要联网。标题 / DOI 会发送到检索服务；输入网页链接时读取该网页。无查询历史、无鼠标跟随、无自动开机启动。快捷键触发后会复制选词，剪贴板会变为该文字。
-- 可选邮箱保存在 `settings.json`，快捷键保存在 `shortcut.json`；二者不随 Release 分发。直接学术搜索仅在点击时将查询发送到 Google Scholar。
+- 从分类、图谱等内部入口打开 PDF，进入 **文献阅读**。支持翻页、跳页、适合宽度、缩放和书签。
+- 右侧笔记可直接编辑、撤销 / 重做、加粗、斜体、插入页码、插入研究笔记模板及导出。编辑后自动保存，也可点击 **保存笔记** 或在笔记区按 Ctrl+S。
+- **阅读区右键 → 添加阅读笔记**，快速插入当前页记录；有当前页最近框选文字时一并带入。右键还可在点击位置添加批注和书签。
+- 阅读工具支持 **框选高亮 / 框选批注 / 复制文字**，拖出选区即可操作；批注列表支持定位、编辑、删除，颜色可选。
+- **参考文献侧栏** 可独立打开。优先保留原始编号；显示 `1*` 等星号时只是提取顺序，原编号未识别，请回原文核对。条目可查原文、下载归档或收藏到课题。
+- 笔记、书签和批注存放在本地库，PDF 原文件不改写，其他阅读器不会自动显示本软件批注。扫描版 PDF 和复杂分栏可能无法正确提取文字或引用，当前不内置 OCR。
 
-## 源码运行 / 打包
+## 离线图谱
 
-Python 3.10+，桌面检索仅使用标准库；全局助手使用 Windows 自带 .NET Framework。
+**收藏概览** 查看课题分布；**文献关系** 查看标题、摘要、关键词的文本相似关系及本地 PDF 中的 DOI 引用证据。
 
-```powershell
-python app.py
-python -m unittest discover -s tests -v
-python tests/gui_smoke.py
-# 打包需要 PyInstaller 和 Pillow
-python -m pip install pyinstaller pillow
-powershell -ExecutionPolicy Bypass -File .\build.ps1
-```
+拖动文献数滑条控制密度；滚轮缩放，拖动空白区平移，Shift 框选区域放大，双击节点聚焦邻居，重置视图返回全局。点击概览的课题区域可查看对应部分。节点详情可继续打开 PDF、查询原文或收藏候选。
 
-`tests/live_check.py` / `tests/speed_check.py` 使用公开论文示例联网检查。浏览器扩展集成测试需要 Node.js 和 Playwright：`npm install --no-save playwright`，`npx playwright install chromium`，然后 `node tests/extension_check.cjs`。截图为公开论文示例演示，响应时间受网络和接口影响。
+未入库候选来自本地参考文献，以虚线区分，并非在线全领域推荐。高亮可按阅读次数、本地引用次数、是否下载，或自定义颜色和权重。**本地引用次数不等于全球被引次数**，文本相似也不代表已验证的学术引用。
 
----
+## 阅读总结：昨天实际读了什么
+
+点击标题栏 **阅读总结**，以独立弹窗展示昨天的阅读情况，也可选择今日或其他日期。主页面保持原位，关闭弹窗继续阅读；后台启动不主动弹出。汇总去重阅读篇数、每篇时长、总时长，以及当前本地摘要、笔记和摘录；支持复制和导出。
+
+只有 **文献阅读页处于前台主窗口且 PDF 已加载** 才累计时间。切换页面、其他软件、最小化或隐藏到托盘时暂停，休眠或长时间阻塞的间隔不计。采用约 1 秒采样，计量前台停留时间，不推断视线或专注度；从新版开始记录，不能补算升级前时长。内容基于已有资料，不是 AI 生成摘要，也不是历史笔记快照。
+
+![昨日阅读总结，虚构时间和数据](docs/images/v31-summary.jpg)
+
+## 设置、皮肤和后台运行
+
+右上角 **设置** 是独立页面，支持 **深空蓝 / 极光紫 / 石墨灰 / 极简浅色**，切换立即预览，保存后下次沿用。可设置快捷键、可选 Unpaywall 联系邮箱、**登录 Windows 后后台启动**。
+
+关闭主窗口收起到系统托盘，双击托盘恢复；右键托盘可打开文献库、设置或完整退出。重复启动唤起同一窗口。启用 Windows 登录启动后先驻留后台，可在设置取消。没有账号登录体系或鼠标跟随浮窗。
+
+## EndNote 兼容范围
+
+针对 EndNote 22.3 提供只读导入、附件归档、差异 / 冲突预览及 XML 交换包。请先用备份库测试，保留 `.enl` 和对应 `.Data`。
+
+**已有 EndNote 记录的全自动双向写回尚未实现。** 当前可以从 EndNote 导入本地、导出本地修改及 XML 交换清单，再在 EndNote 中导入或人工核对已有记录；导入完整库可能产生重复。软件不直接修改 EndNote 私有数据库。本软件笔记、图谱、批注和计时不会自动同步为 EndNote 对应功能。
+
+## 数据与网络
+
+文献库、PDF、笔记、批注及阅读时长保存在程序目录的 `本地文献库`。检索会将标题 / DOI 发送给文献服务，网页链接会向目标站点请求；可选 Unpaywall 邮箱随 DOI 查询发送给该服务。离线功能不上传正文。服务可能限流、验证或没有开放全文，原文入口不保证免费 PDF。
+
+## 公开协作
+
+欢迎在 [Issues](https://github.com/J0ey2ou/PaperQuick/issues) 反馈问题，在 [Discussions](https://github.com/J0ey2ou/PaperQuick/discussions) 讨论，或 Fork 后提交 PR。见 [协作指南](CONTRIBUTING.md)。所有者可在 [协作者设置](https://github.com/J0ey2ou/PaperQuick/settings/access) 邀请 GitHub 用户；发送仓库链接本身不赋予写权限。
 
 ## English
 
-**A citation from your supervisor. A research post from a collaborator. Select the paper title and get to the full text.**
+**PaperQuick 3.1** is a local Windows literature workspace: search, archive PDFs by research project, read and annotate, explore relationships, and review yesterday's reading. The Windows package needs no Python installation or account. Local organization, reading, graphs and recaps use no external AI or AI API key. Search and download require internet access.
 
-PaperQuick is a small Windows desktop app plus an Edge / Chrome extension. It accepts paper titles, DOIs, arXiv IDs and readable article links, finds full-text / PDF entry points, and opens a website when the match is clear. No Python installation or account is needed for the packaged app.
+### Install and update
 
-### Download and paste a query
+Download `PaperQuick-v3.1-Windows.zip` from [Releases](https://github.com/J0ey2ou/PaperQuick/releases/latest), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Exit from the tray before updating, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
 
-1. Download `PaperQuick-v2.3-Windows.zip` from [Releases](https://github.com/J0ey2ou/PaperQuick/releases/latest), then **extract the complete archive**.
-2. Run `文献直达.exe`. Keep the helper, extension folder and guide beside it.
-3. Copy an English paper title, DOI, arXiv link or research-post link. Click **粘贴并查找** (Paste & Search), or paste manually and use **查找原文** (Find Full Text) / `Ctrl + Enter`.
-4. Results appear as services respond. Open or copy PDF, full-text and publisher links. **直接学术搜索** (Search Google Scholar) opens the current query directly when an API is slow.
+### Practical workflow
 
-### Selected text in Word, PDF readers or desktop WeChat
+1. **Search**: paste an English title, DOI, arXiv identifier or readable article link, then search or press Ctrl+Enter. Verify metadata before collecting. Direct Scholar search is available when services are slow. Complete WeChat page verification in your browser before selecting the English title / DOI.
+2. **Selected text**: start the helper, select copyable text in Word/PDF/WeChat and press the configured shortcut. Change it in top-right Settings (e.g. Ctrl+Alt+J); the tray shows the active combination. For browser right-click, enable developer mode at `edge://extensions` or `chrome://extensions` and load `browser-extension` unpacked. Desktop apps use hotkeys, not a universal right-click menu.
+3. **Download**: click `收藏 / 下载归档`, choose/create a project. Direct PDFs archive automatically; otherwise the relevant full-text/publisher page opens. Library right-click offers download-page navigation or automatic download and archiving. Manually downloaded subscription PDFs must be attached/imported; browser downloads are not monitored.
+4. **Rename**: configure `{year}_{author}_{title}` or Chinese tokens `{年份}_{第一作者}_{标题}`. Right-click selected records to rename managed attachments. Buttons select all records or all downloaded records across the entire library, clearing filters. Review the preview; missing PDFs are skipped and filename collisions receive suffixes. Original source files are preserved.
+5. **Read**: internal PDF actions open the reader. Notes autosave and support formatting, page markers, templates and export. Right-click the PDF to add a note, comment or bookmark. Drag regions to highlight, comment or copy text. Annotations live in the database, not inside the original PDF.
+6. **References**: open the detachable panel. Original numbers are retained where recognized; `1*` indicates extraction order only. Verify before searching, collecting or downloading. Scans and complex layouts may need manual correction; OCR is not included.
+7. **Graph**: node-count slider, wheel zoom, blank-area pan, Shift box zoom, double-click neighborhood focus and reset. Candidates come from local references. Highlight by reading count, local citation count or PDF availability, with configurable colors/weights. Local citation counts are not global metrics.
+8. **Recap popup**: the title-bar `阅读总结` button opens a separate window for yesterday, today or a selected date, with distinct papers, duration, current abstracts/notes/excerpts. The main page stays in place; background startup does not interrupt you. Copy or export the report. Only a loaded reader in the foreground main window counts; other pages/apps, tray and suspend gaps do not. Sampling is about one second and measures dwell time rather than attention. Pre-upgrade time is not inferred. Content is neither AI-written nor a historical snapshot.
+9. **Settings**: Space Blue, Aurora Purple, Graphite and Light themes preview immediately; save to persist. Configure shortcuts, optional Unpaywall email and Windows sign-in background startup. Close hides to tray; double-click restores; tray Exit fully quits. No mouse-following overlay or local account system.
 
-1. Click **全局快捷键** (Global Shortcut), or run `全局选词助手.exe`. The helper stays in the system tray.
-2. Select a copyable title / DOI in your original app, then press the shortcut shown in the status bar or tray menu.
-3. To customize it, open **设置** (Settings), click the shortcut field, press your combination (or type it), and click **保存并启用** (Save & Enable). Alternatively, right-click the tray icon → **自定义快捷键…** (Customize Shortcut) → press a combination → save.
-4. Use at least two modifiers from `Ctrl`, `Alt`, `Shift`, followed by a letter, digit or `F1–F24`, e.g. `Ctrl + Alt + J`. Changes apply immediately and persist across restarts. If a new combination is occupied, the active shortcut stays available; check the displayed status.
-5. Default: `Ctrl + Alt + F`, falling back to `Ctrl + Alt + Shift + F`, then `Ctrl + Alt + F8`. Exit the helper from its tray menu. Closing the main app leaves the helper running.
+### EndNote, privacy and collaboration
 
-### Browser context menu
+EndNote 22.3 support covers read-only import, attachment archiving, conflict previews and XML exchange. **Automatic write-back to existing EndNote records is not implemented.** Review exported changes manually; importing an entire exchange library may duplicate records. Keep backups of both `.enl` and `.Data`. PaperQuick notes, annotations, graphs and reading time do not automatically become EndNote features.
 
-1. Open `edge://extensions` or `chrome://extensions`.
-2. Enable Developer Mode → Load Unpacked → choose the included `browser-extension` folder.
-3. Select a title / DOI, then right-click → **查找文献并打开原文** (Find Paper and Open Full Text).
-4. On a visible article, use **查找当前页面中的论文** (Find Papers on This Page) or click the extension icon. Complete WeChat verification manually before querying the rendered page.
-5. The extension works without the desktop app. Reload it from the extensions page after an update. Managed browsers may prohibit unpacked extensions.
-
-### Behavior and limits
-
-A single DOI opens its publisher / DOI page immediately; an arXiv ID opens its PDF. Other versions are added in the background. Title searches auto-open only after candidate discovery and a unique exact title match; ambiguous results require review. Open versions may be preprints or accepted manuscripts. Subscription papers may require institutional access, and links may become unavailable.
-
-The app returns download links; the browser handles files. It needs internet access and sends titles / DOIs to literature services. It does not keep query history, track the mouse or start automatically with Windows. The hotkey copies selected text into your clipboard. Scanned / protected PDFs and elevated windows may not support copying.
-
-Optional Unpaywall email and shortcut preferences are stored locally in `settings.json` and `shortcut.json`; neither is shipped. Google Scholar receives a query only when you click its search button. Source run / build commands are shown above. Screenshots demonstrate a public paper; response time depends on the network.
-
-The GIF demonstrates the selection-to-results flow with a public-paper fixture. The native context menu is not captured, and the timing is not a network benchmark. [Promotion materials](推送文案.md) include a self-contained HTML page with rich-text copying and downloadable screenshots / GIF.
+Search sends titles/DOIs to services and requests supplied URLs; optional Unpaywall email accompanies its queries. Offline features do not upload library contents. Full-text access depends on permissions, availability and service limits. Contribute through Issues, Discussions or fork/PR; see [CONTRIBUTING.md](CONTRIBUTING.md).

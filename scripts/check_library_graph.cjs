@@ -1,0 +1,11 @@
+const fs=require('fs'),path=require('path'),{pathToFileURL}=require('url');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE);
+(async()=>{const browser=await chromium.launch({channel:'chromium',headless:true});const page=await browser.newPage({viewport:{width:1250,height:950},deviceScaleFactor:1});const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/^https?:/.test(r.url()))requests.push(r.url())});
+await page.emulateMedia({reducedMotion:'reduce'});await page.goto(pathToFileURL(path.resolve('build/demo-graph.html')).href);await page.waitForSelector('#list .item');
+if(await page.locator('#list .item').count()<7)throw Error('Collection count and candidates');
+await page.locator('#relationshipTab').click();await page.locator('#canvas').waitFor({state:'visible'});await page.screenshot({path:'docs/images/library-graph.png',fullPage:true});
+await page.locator('#project').selectOption({label:'队列与疾病预测'});const filtered=await page.locator('#list .item').count();if(filtered<3||filtered>8)throw Error('Project filter');
+await page.locator('#search').fill('cardiovascular');if(await page.locator('#list .item').count()!==1)throw Error('Title filter');
+await page.locator('#citation').uncheck();await page.locator('#candidate').uncheck();await page.locator('#highlightMode').selectOption('read_count');await page.locator('#highlightMode').selectOption('custom');await page.locator('#reset').click();
+if(errors.length||requests.length)throw Error(JSON.stringify({errors,requests}));
+console.log(JSON.stringify({passed:true,checks:['collection counts','relationship canvas','project filter','title search','edge filter','offline: zero HTTP requests','no JavaScript errors']}));await browser.close()})().catch(e=>{console.error(e);process.exit(1)});

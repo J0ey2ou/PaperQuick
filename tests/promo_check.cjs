@@ -22,7 +22,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.ok(clipboard.text.includes('https://github.com/J0ey2ou/PaperQuick'));
     await page.locator('#text').click();
     const plain = await page.evaluate(() => navigator.clipboard.readText());
-    for (const phrase of ['Word / PDF / 微信电脑版','Ctrl + Alt + J','edge://extensions','公众号验证']) assert.ok(plain.includes(phrase));
+    for (const phrase of ['Word / PDF / 微信电脑版','Ctrl + Alt + J','edge://extensions','公众号验证','按规则重新命名','阅读总结','全自动双向写回尚未实现']) assert.ok(plain.includes(phrase));
     assert.ok(!plain.includes('非实时测速')); // Media captions are not included in pure-copy text.
     const gif = await page.locator('#gif-download').getAttribute('href');
     assert.ok(gif.startsWith('data:image/gif;base64,'));
@@ -30,6 +30,8 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.locator('#image').click();
     await page.waitForFunction(() => document.getElementById('status').textContent.includes('已复制截图'));
     assert.ok(await page.evaluate(async () => (await navigator.clipboard.read())[0].types.includes('image/png')));
+    assert.equal(await page.locator('img[data-kind^="shot:"]').count(),3);
+    assert.ok(await page.locator('img').evaluateAll(images=>images.every(i=>i.complete && i.naturalWidth>0)));
     assert.deepEqual(failures, []);
     await page.screenshot({path:'build/promo-preview.png',fullPage:true});
     fs.writeFileSync('build/promo-check.json', JSON.stringify({passed:true,richText:true,embeddedScreenshot:true,embeddedGif:true,gifDownload:true,expandedInstructions:true,plainText:true,imageCopy:true}));

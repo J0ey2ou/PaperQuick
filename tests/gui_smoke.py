@@ -15,6 +15,7 @@ paper.add_link("开放 PDF", "https://example.org/test.pdf", "pdf", "Europe PMC"
 paper.add_link("出版社 / DOI", "https://doi.org/10.1038/s41586-021-03819-2", "publisher", "Crossref")
 opened = []
 app.open_url = opened.append
+app.open_link = lambda paper,link:opened.append(link.url)
 app.auto_open = True
 app.busy = True
 app.events.put(("partial", Result(paper.doi, [paper], complete=False)))
@@ -49,13 +50,12 @@ buttons = frame.winfo_children()[-1].winfo_children()
 assert len(buttons) == 3
 assert "打开推送" in buttons[0].cget("text")
 app.settings()
-dialogs = [child for child in root.winfo_children() if isinstance(child, tk.Toplevel)]
-assert len(dialogs) == 1
-panel = dialogs[0].winfo_children()[0]
+assert app.current_page=='settings'
+panel = app.settings_panel
 entries = [child for child in panel.winfo_children() if child.winfo_class() == 'TEntry']
 assert len(entries) == 2
 assert 'Ctrl' in entries[0].get()
 assert any(child.winfo_class() == 'TButton' and child.cget('text') == '保存并启用' for child in panel.winfo_children())
-dialogs[0].destroy()
+app.settings_page.destroy()
 root.destroy()
 print("GUI smoke passed: initial / results / partial-service note / error / buttons")

@@ -1,0 +1,5 @@
+PyInstaller==6.21.0
+Pillow
+pypdf==6.19.0
+pypdfium2==5.14.0
+numpy

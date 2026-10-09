@@ -10,3 +10,12 @@ shortcut.json.tmp
 bundle-check*.json
 extension-preview.png
 *.zip
+本地文献库/
+演示文献库/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.enl
+*.Data/
+runtime/
+.venv/

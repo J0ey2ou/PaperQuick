@@ -19,3 +19,4 @@ extension-preview.png
 *.Data/
 runtime/
 .venv/
+word-integration/*.pdb

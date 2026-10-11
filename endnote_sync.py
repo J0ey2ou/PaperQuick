@@ -186,7 +186,7 @@ def export_xml(records, destination, library=None):
             urls=ET.SubElement(item,'urls');pdf_urls=ET.SubElement(urls,'pdf-urls')
             paths=list(r.get('pdf_paths', []))
             if library and r.get('id'):
-                paths.extend(str(library.root/a['path']) for a in library.get(r['id'])['attachments'])
+                paths.extend(str(library.root/a['path']) for a in library.get(r['id'])['attachments'] if a.get('kind','pdf')=='pdf' and a.get('path') and (library.root/a['path']).is_file())
             for p in dict.fromkeys(paths):
                 # Absolute local links; EndNote's import option controls copying into its .Data folder.
                 ET.SubElement(pdf_urls,'url').text = Path(p).resolve().as_uri()

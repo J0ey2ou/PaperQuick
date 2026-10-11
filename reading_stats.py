@@ -34,6 +34,7 @@ class ReadingClock:
 
 def foreground_reader(app):
     if app.current_page!='reader' or not app.reader_page or not app.reader_page.rid or app.reader_page.loading:return False
+    if not getattr(app.reader_page,'path',None) or getattr(app.reader_page,'count',0)<=0:return False
     if app.root.state() not in ('normal','zoomed'):return False
     import os
     if os.name!='nt':return app.root.focus_displayof() is not None
@@ -49,11 +50,17 @@ def content_excerpt(record):
     if record.get('abstract'):return record['abstract'][:900]
     text=record.get('text','')
     found=re.search(r'(?is)\babstract\b\s*[:：]?(.{50,2200}?)(?:\bkeywords\b|\bintroduction\b|\bbackground\b|$)',text)
-    return re.sub(r'\s+',' ',found.group(1)).strip()[:900] if found else '尚无可用摘要；可补充文献信息或记录阅读笔记。'
+    return re.sub(r'\s+',' ',found.group(1)).strip()[:900] if found else '这篇文献还没有摘要。阅读时记下的想法也会出现在这里。'
 
 
 def daily_recap(library,day):
-    start=datetime.combine(day,datetime.min.time()).astimezone();end=datetime.combine(day+timedelta(days=1),datetime.min.time()).astimezone()
+    return reading_recap(library,day,day)
+
+
+def reading_recap(library,first_day,last_day=None,project=None):
+    last_day=last_day or first_day
+    if last_day<first_day:raise ValueError('结束日期不能早于开始日期。')
+    start=datetime.combine(first_day,datetime.min.time()).astimezone();end=datetime.combine(last_day+timedelta(days=1),datetime.min.time()).astimezone()
     totals={}
     for row in library.db.execute('SELECT paper,start,end FROM reading_sessions WHERE start<? AND end>?',(end.timestamp(),start.timestamp())):
         seconds=max(0,min(row['end'],end.timestamp())-max(row['start'],start.timestamp()))
@@ -63,9 +70,15 @@ def daily_recap(library,day):
         if seconds<=0:continue
         try:record=library.get(rid)
         except ValueError:continue
+        if project and project not in record['projects']:continue
         papers.append({'id':rid,'title':record['title'],'doi':record['doi'],'seconds':seconds,'content':content_excerpt(record),
-                       'notes':record.get('notes',''),'annotations':record.get('annotations',[])})
-    return {'date':day.isoformat(),'count':len(papers),'seconds':sum(p['seconds'] for p in papers),'papers':papers}
+                       'abstract':record.get('abstract',''),'keywords':record.get('keywords',''),
+                       'notes':record.get('notes',''),'annotations':record.get('annotations',[]),'attachments':record.get('attachments',[])})
+    from research_topics import topic_overview
+    topics=topic_overview(papers)
+    return {'date':first_day.isoformat(),'end_date':last_day.isoformat(),'count':len(papers),
+            'seconds':sum(p['seconds'] for p in papers),'papers':papers,'topics':topics,
+            'notes_count':sum(bool(p['notes'].strip())+len(p['annotations']) for p in papers)}
 
 
 def duration(seconds):
@@ -74,12 +87,20 @@ def duration(seconds):
 
 
 def recap_text(data):
-    lines=[f"{data['date']} 阅读总结",f"阅读 {data['count']} 篇 · 前台阅读 {duration(data['seconds'])}",'',
-           '仅统计阅读页作为前台主窗口的停留时间；切换页面、其他软件、托盘、休眠间隔不计入。',
-           '内容来自当前本地摘要、笔记与批注，未调用 AI。升级前未记录的阅读时间不追溯。','']
+    period=data['date'] if data.get('end_date',data['date'])==data['date'] else data['date']+' — '+data['end_date']
+    lines=[f"{period} 阅读总结",recap_intro(data),'']
+    keywords=[k['term'] for k in data.get('topics',{}).get('keywords',[])[:8]]
+    if keywords:lines.extend(['阅读关键词：'+' · '.join(keywords),''])
     for i,p in enumerate(data['papers'],1):
-        lines.extend([f"{i}. {p['title']}",f"阅读时间：{duration(p['seconds'])}",f"DOI：{p['doi'] or '待补充'}",'摘要 / 内容：'+p['content'],''])
-        if p['notes']:lines.extend(['当前笔记：',p['notes'][:4000],''])
+        lines.extend([f"{i}. {p['title']}",f"阅读时间：{duration(p['seconds'])}",f"DOI：{p['doi'] or '待补充'}",'文献摘要：'+p['content'],''])
+        if p['notes']:lines.extend(['我的笔记：',p['notes'][:4000],''])
         for a in p['annotations'][:12]:lines.extend([f"第 {a['page']+1} 页摘录 / 批注：",a.get('quote',''),a.get('text',''),''])
-    if not data['papers']:lines.append('这一天没有已记录的前台阅读。开始阅读后，这里会自动汇总。')
+    if not data['papers']:lines.append('这段时间还没有阅读记录。打开一篇文献，下一次回顾就从这里开始。')
     return '\n'.join(lines)
+
+
+def recap_intro(data):
+    if not data['count']:return '留一点时间，读一篇想读的文献。'
+    intro=f"这段时间，你阅读了 {data['count']} 篇文献，累计 {duration(data['seconds'])}。"
+    if data.get('notes_count'):intro+=f"这些文献已有 {data['notes_count']} 份笔记与标记，可以一起回顾。"
+    return intro

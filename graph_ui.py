@@ -26,7 +26,7 @@ class GraphPage:
         ttk.Button(header,text='导出离线网页',command=self.export).pack(side='right')
         ttk.Button(header,text='刷新图谱',command=self.refresh).pack(side='right',padx=8)
         stats=ttk.Frame(self.frame,padding=(24,0,24,16));stats.pack(fill='x');self.metrics=[]
-        for i,label in enumerate(('收藏文献','已归档 PDF','已读文献','未入库候选')):
+        for i,label in enumerate(('收藏文献','已归档正文','已读文献','待探索文献')):
             stats.columnconfigure(i,weight=1);card=ttk.Frame(stats,style='Card.TFrame',padding=(18,12));card.grid(row=0,column=i,sticky='nsew',padx=(0,12 if i<3 else 0))
             value=tk.StringVar(value='—');self.metrics.append(value)
             ttk.Label(card,text=label,style='CardMuted.TLabel').pack(anchor='w')
@@ -44,7 +44,7 @@ class GraphPage:
         self.highlight_mode=tk.StringVar(value=next(k for k,v in self.highlight_modes.items() if v==self.highlight['mode']))
         combo=ttk.Combobox(highlights,textvariable=self.highlight_mode,values=list(self.highlight_modes),state='readonly',width=20);combo.pack(side='left');combo.bind('<<ComboboxSelected>>',self.change_highlight)
         ttk.Button(highlights,text='自定义颜色 / 权重',command=self.custom_highlight).pack(side='left',padx=10)
-        self.show_candidates=tk.BooleanVar(value=True);ttk.Checkbutton(highlights,text='显示未入库候选（虚线）',variable=self.show_candidates,command=self.draw).pack(side='left',padx=8)
+        self.show_candidates=tk.BooleanVar(value=True);ttk.Checkbutton(highlights,text='显示待探索文献（虚线）',variable=self.show_candidates,command=self.draw).pack(side='left',padx=8)
         explore=ttk.Frame(self.frame,padding=(24,0,24,10));explore.pack(fill='x')
         ttk.Label(explore,text='显示数量',style='Muted.TLabel').pack(side='left')
         self.limit=tk.DoubleVar(value=80);self.limit_label=tk.StringVar(value='80 篇')
@@ -55,7 +55,7 @@ class GraphPage:
         side=ttk.Frame(content,style='Card.TFrame',padding=18,width=290);side.pack(side='right',fill='y',padx=(14,0));side.pack_propagate(False)
         ttk.Label(side,text='研究关系',style='Card.TLabel',font=(FONT,12,'bold')).pack(anchor='w',pady=(0,12))
         self.similarity=tk.BooleanVar(value=True);self.citation=tk.BooleanVar(value=True)
-        for title,var in [('内容相似',self.similarity),('本地引用证据',self.citation)]:ttk.Checkbutton(side,text=title,variable=var,command=self.draw).pack(anchor='w',pady=3)
+        for title,var in [('内容相似',self.similarity),('文献间的引用',self.citation)]:ttk.Checkbutton(side,text=title,variable=var,command=self.draw).pack(anchor='w',pady=3)
         ttk.Label(side,text='相似：标题、摘要、关键词\n引用：本地 PDF 参考文献 DOI',style='CardMuted.TLabel',justify='left').pack(anchor='w',pady=(12,20))
         self.info=tk.StringVar(value='点击节点查看详情；双击节点聚焦关联。\n\n拖动空白处平移，滚轮以鼠标为中心缩放。按住 Shift 框选区域放大。\n\n滑条控制显示数量，优先展示库内文献与连接较多的节点。')
         information=tk.Text(side,height=4,wrap='word',bg=PANEL,fg=MUTED,relief='flat',font=(FONT,10),state='disabled')
@@ -63,7 +63,7 @@ class GraphPage:
         def update_info(*_):
             information.configure(state='normal');information.delete('1.0','end');information.insert('1.0',self.info.get());information.configure(state='disabled')
         self.info.trace_add('write',update_info);update_info()
-        ttk.Button(side,text='打开选中文献 PDF',command=self.open_pdf).pack(fill='x',pady=8)
+        ttk.Button(side,text='阅读选中文献',command=self.open_pdf).pack(fill='x',pady=8)
         ttk.Button(side,text='查找选中文献原文',command=self.query_selected).pack(fill='x',pady=(0,8))
         ttk.Button(side,text='将候选文献收藏到课题',command=self.collect_selected).pack(fill='x',pady=(0,8))
         ttk.Button(side,text='重置视图',command=self.reset).pack(fill='x')
@@ -245,10 +245,11 @@ class GraphPage:
     def open_pdf(self):
         if not self.selected:self.info.set('先在文献关系图中选中一个节点。');return
         if self.selected not in self.records:self.info.set('这篇候选文献尚未入库。可以先查找原文，再下载归档。');return
-        attachments=self.records[self.selected]['attachments']
-        if not attachments:self.info.set('此文献尚未添加 PDF。请到“文献分类”关联已下载文件。');return
+        from library_core import readable_attachments
+        attachment=next((a for a in readable_attachments(self.records[self.selected]) if a.get('role')=='primary'),None)
+        if not attachment:self.info.set('此文献尚未添加正文。请到“文献分类 → 附件 / 比对”添加 PDF / Word。');return
         if getattr(self,'on_reader',None):self.on_reader(self.selected);return
-        try:os.startfile(self.directory/attachments[0]['path'])
+        try:os.startfile(self.directory/attachment['path'])
         except OSError as exc:self.status.set(str(exc))
 
     def export(self):

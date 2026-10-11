@@ -8,7 +8,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import webbrowser
-from library_core import Library, FIELDS, DEFAULT_TEMPLATE, validate_template, filename
+from library_core import Library, FIELDS, DEFAULT_TEMPLATE, validate_template, filename,local_attachments,readable_attachments
 from download_actions import resolve_download
 from graph_view import write_graph
 import endnote_sync
@@ -23,7 +23,7 @@ class LibraryWindow:
             self.win.title('文献直达 · 本地文献库')
             self.win.geometry('1320x920'); self.win.minsize(1120,800)
         install_theme(self.win.winfo_toplevel())
-        self.events = queue.Queue(); self.busy = False; self.current_project = None
+        self.events = queue.Queue(); self.busy = False; self.current_project = None;self.word_citations=None;self.attachment_window=None;self.conversion_window=None
         self.status = tk.StringVar(value='本地整理与图谱完全离线 · 导入 PDF 保留原文件')
         self.search = tk.StringVar()
         header=ttk.Frame(self.win,padding=(24,12 if embedded else 22,24,10)); header.pack(fill='x')
@@ -32,10 +32,10 @@ class LibraryWindow:
         ttk.Label(heading,text='文献分类' if embedded else '我的文献库',font=(FONT,21,'bold')).pack(anchor='w')
         ttk.Label(heading,text='PAPERQUICK  /  RESEARCH LIBRARY',foreground=ACCENT,font=('Segoe UI',9,'bold')).pack(anchor='w',pady=(4,0))
         ttk.Button(header,text='文献库文件夹',command=lambda: os.startfile(self.library.root)).pack(side='right')
-        ttk.Label(header,text='● 本地工作区',foreground=ACCENT).pack(side='right',padx=20)
+        ttk.Label(header,text='我的研究收藏',foreground=ACCENT).pack(side='right',padx=20)
         stats=ttk.Frame(self.win,padding=(24,8,24,8));stats.pack(fill='x')
         self.metrics=[]
-        for i,(label,hint,color) in enumerate([('总收藏','LIBRARY RECORDS',ACCENT),('已归档 PDF','LOCAL FULL TEXT','#7c9bff'),('已读文献','READING PROGRESS','#65dbb0'),('课题分类','RESEARCH PROJECTS','#bf9afb')]):
+        for i,(label,hint,color) in enumerate([('总收藏','LIBRARY RECORDS',ACCENT),('已归档正文','LOCAL FULL TEXT','#7c9bff'),('已读文献','READING PROGRESS','#65dbb0'),('课题分类','RESEARCH PROJECTS','#bf9afb')]):
             stats.columnconfigure(i,weight=1)
             card=tk.Frame(stats,bg=PANEL,highlightbackground=LINE,highlightthickness=1)
             card.grid(row=0,column=i,sticky='nsew',padx=(0,12 if i<3 else 0))
@@ -46,8 +46,8 @@ class LibraryWindow:
             tk.Label(card,text=hint,bg=PANEL,fg='#647e9b',font=('Segoe UI',8),anchor='w').pack(fill='x',padx=18,pady=(0,12))
         toolbar=ttk.Frame(self.win,padding=(24,10,24,14));toolbar.pack(fill='x')
         self.controls=[]
-        for title,command in [('导入 PDF',self.import_pdfs),('导入文件夹',self.import_folder),('新增条目',self.new_record),('命名规则',self.naming),('离线图谱',self.graph),('EndNote 同步',self.endnote)]:
-            button=ttk.Button(toolbar,text=title,command=command,style='Accent.TButton' if title=='导入 PDF' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
+        for title,command in [('导入 PDF / Word',self.import_pdfs),('导入文件夹',self.import_folder),('新增条目',self.new_record),('命名规则',self.naming),('离线图谱',self.graph),('EndNote 同步',self.endnote),('Word 引用',self.word)]:
+            button=ttk.Button(toolbar,text=title,command=command,style='Accent.TButton' if title.startswith('导入 PDF') else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
         footer=ttk.Frame(self.win);footer.pack(side='bottom',fill='x')
         body=ttk.Panedwindow(self.win,orient='horizontal');body.pack(fill='both',expand=True,padx=24)
         left=ttk.Frame(body,width=210,padding=14,style='Card.TFrame');right=ttk.Frame(body,padding=(16,10),style='Card.TFrame');body.add(left,weight=0);body.add(right,weight=1)
@@ -72,16 +72,19 @@ class LibraryWindow:
         scroll.pack(side='right',fill='y');self.tree.pack(fill='both',expand=True)
         self.tree.bind('<Double-1>',lambda _:self.open_pdf());self.tree.bind('<<TreeviewSelect>>',self.detail)
         self.context_menu=tk.Menu(self.win,tearoff=False,bg=PANEL,fg=FG,activebackground='#1c485f',activeforeground=ACCENT)
-        for title,command in [('下载原文（打开下载页面）',self.download_selected),('下载并自动归档',lambda:self.download_selected(archive=True)),('按规则重新命名',self.rename_selected),('选择所有文献',lambda:self.select_all(False)),('选择所有已下载文献',lambda:self.select_all(True)),('打开 PDF',self.open_pdf),('关联已下载 PDF',self.attach_pdf),('编辑信息',self.edit),('分配课题',self.assign)]:
+        for title,command in [('下载原文（打开下载页面）',self.download_selected),('下载并自动归档',lambda:self.download_selected(archive=True)),('按规则重新命名',self.rename_selected),('选择所有文献',lambda:self.select_all(False)),('选择所有已下载文献',lambda:self.select_all(True)),('阅读正文',self.open_pdf),('关联已下载 PDF',self.attach_pdf),('编辑信息',self.edit),('分配课题',self.assign)]:
             self.context_menu.add_command(label=title,command=command)
         self.tree.bind('<Button-3>',self.show_context_menu)
+        self.context_menu.add_separator();self.context_menu.add_command(label='插入 Word 引用 / 参考文献',command=self.word)
+        self.context_menu.add_command(label='附件管理 / 比对阅读',command=self.attachments)
+        self.context_menu.add_command(label='Word / PDF 互转',command=self.convert_document)
         self.tree.bind('<Control-a>',lambda _:self.select_all(False))
         selection_bar=ttk.Frame(footer,padding=(24,8,24,0));selection_bar.pack(fill='x')
         for title,command in [('选择所有文献',lambda:self.select_all(False)),('选择所有已下载',lambda:self.select_all(True)),('按规则重新命名',self.rename_selected)]:
             b=ttk.Button(selection_bar,text=title,command=command);b.pack(side='left',padx=(0,8));self.controls.append(b)
         actions=ttk.Frame(footer,padding=(24,8,24,8));actions.pack(fill='x')
-        for title,command in [('下载原文',self.download_selected),('打开 PDF',self.open_pdf),('关联已下载 PDF',self.attach_pdf),('编辑信息',self.edit),('分配课题',self.assign),('标记已读',lambda:self.mark('已读')),('标记未读',lambda:self.mark('未读'))]:
-            button=ttk.Button(actions,text=title,command=command,style='Accent.TButton' if title=='打开 PDF' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
+        for title,command in [('下载原文',self.download_selected),('阅读正文',self.open_pdf),('附件 / 比对',self.attachments),('编辑信息',self.edit),('分配课题',self.assign),('标记已读',lambda:self.mark('已读')),('标记未读',lambda:self.mark('未读'))]:
+            button=ttk.Button(actions,text=title,command=command,style='Accent.TButton' if title=='阅读正文' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
         self.details=tk.StringVar(value='选择文献可查看 DOI、摘要和附件位置。')
         detail_card=ttk.Frame(footer,style='Card.TFrame',padding=(16,8));detail_card.pack(fill='x',padx=24)
         ttk.Label(detail_card,text='文献详情  /  PAPER INSIGHT',foreground=ACCENT,background=PANEL,font=(FONT,9,'bold')).pack(anchor='w',pady=(0,5))
@@ -95,14 +98,47 @@ class LibraryWindow:
         if not embedded:self.win.protocol('WM_DELETE_WINDOW',self.close)
 
     def close(self):
-        if self.busy:
+        if self.busy or any(w and not w.closed and w.busy for w in (self.word_citations,self.attachment_window,self.conversion_window)):
             self.status.set('操作仍在进行，完成后可关闭。');return
+        for window in (self.word_citations,self.attachment_window,self.conversion_window):
+            if window and not window.closed:window.close()
         self.library.close();self.win.destroy()
+
+    def attachments(self):
+        if self.busy:return
+        rid=self.selected(True)
+        if not rid:return
+        if self.attachment_window and not self.attachment_window.closed:
+            if self.attachment_window.busy:self.attachment_window.win.lift();return
+            self.attachment_window.close()
+        from attachment_ui import AttachmentManager
+        def compare(attachment):
+            if getattr(self,'on_compare',None):self.on_compare(rid,attachment)
+            else:self.status.set('请从主窗口的文献阅读页面打开附件比对。')
+        self.attachment_window=AttachmentManager(self.win,self.library.root,rid,on_compare=compare,on_changed=self.refresh)
+
+    def convert_document(self):
+        if self.busy:return
+        rid=self.selected(True)
+        if not rid:return
+        if self.conversion_window and not self.conversion_window.closed:
+            self.conversion_window.win.lift();return
+        from document_conversion_ui import ConversionWindow
+        primary=self.library.primary_attachment(rid)
+        source=self.library.root/primary['path'] if primary else None
+        self.conversion_window=ConversionWindow(self.win,self.library.root,rid,source=source,on_done=lambda path,attachment:self.refresh())
+
+    def word(self):
+        if self.busy:self.status.set('文献仍在整理，请完成后打开 Word 引用。');return
+        if self.word_citations and not self.word_citations.closed:
+            self.word_citations.load_records();self.word_citations.win.deiconify();self.word_citations.win.lift();return
+        from word_citation_ui import WordCitationsWindow
+        self.word_citations=WordCitationsWindow(self.win,self.library.root,selected=list(self.tree.selection()),on_library_changed=self.refresh)
 
     def refresh(self):
         previous=self.current_project
         records=self.library.records()
-        for value,count in zip(self.metrics,(len(records),sum(bool(r['attachments']) for r in records),sum(r['status']=='已读' for r in records),len(self.library.projects()))):value.set(str(count))
+        for value,count in zip(self.metrics,(len(records),sum(any(a.get('role')=='primary' for a in readable_attachments(r)) for r in records),sum(r['status']=='已读' for r in records),len(self.library.projects()))):value.set(str(count))
         self.project_rows=self.library.projects();self.projects.delete(0,'end')
         self.projects.insert('end',f'全部文献 ({len(self.library.records())})')
         for p in self.project_rows:
@@ -123,7 +159,7 @@ class LibraryWindow:
         index=0
         for r in self.library.records(self.current_project):
             if query not in ' '.join(str(r.get(k,'')) for k in ('title','doi','authors','keywords')).lower():continue
-            self.tree.insert('','end',iid=r['id'],values=(r['title'],r['year'],self.library.project(r['primary_project'])['name'],r['status'],'已归档' if r['attachments'] else '待添加'),tags=('odd' if index%2 else 'even','read' if r['status']=='已读' else ''))
+            self.tree.insert('','end',iid=r['id'],values=(r['title'],r['year'],self.library.project(r['primary_project'])['name'],r['status'],'已归档' if any(a.get('role')=='primary' for a in readable_attachments(r)) else '待添加'),tags=('odd' if index%2 else 'even','read' if r['status']=='已读' else ''))
             index+=1
             if r['id'] in selected:self.tree.selection_add(r['id'])
 
@@ -179,24 +215,24 @@ class LibraryWindow:
     def new_project(self):self.choose_project(lambda pid:None,'新建课题')
 
     def import_pdfs(self):
-        paths=filedialog.askopenfilenames(parent=self.win,title='选择 PDF（复制原文件）',filetypes=[('PDF','*.pdf')])
+        paths=filedialog.askopenfilenames(parent=self.win,title='导入 PDF / Word（保留原文件）',filetypes=[('PDF / Word','*.pdf *.docx *.doc'),('PDF','*.pdf'),('Word','*.docx *.doc')])
         if paths:self.choose_project(lambda pid:self.batch_import(paths,pid))
 
     def import_folder(self):
-        folder=filedialog.askdirectory(parent=self.win,title='导入文件夹中的 PDF（包含子目录）')
+        folder=filedialog.askdirectory(parent=self.win,title='导入文件夹中的 PDF / Word（包含子目录）')
         if folder:
-            paths=list(Path(folder).rglob('*.pdf'))
-            if not paths:messagebox.showinfo('没有 PDF','该文件夹中没有 PDF。',parent=self.win);return
+            paths=[p for p in Path(folder).rglob('*') if p.is_file() and p.suffix.lower() in ('.pdf','.docx','.doc') and not p.name.startswith('~$')]
+            if not paths:messagebox.showinfo('没有可导入文档','该文件夹中没有 PDF 或 Word 文档。',parent=self.win);return
             self.choose_project(lambda pid:self.batch_import(paths,pid))
 
     def batch_import(self,paths,pid):
         def work(lib):
             count=0;errors=[]
             for path in paths:
-                try:lib.import_pdf(path,pid);count+=1
+                try:lib.import_document(path,pid);count+=1
                 except Exception as exc:errors.append(f'{Path(path).name}: {exc}')
-            return f'已导入 / 关联 {count} 个 PDF。'+ ('\n失败：\n'+'\n'.join(errors[:10]) if errors else '')
-        self.run('正在本地解析与归档',work,lambda result:messagebox.showinfo('导入完成',result,parent=self.win))
+            return f'已导入 / 关联 {count} 份文档。'+ ('\n失败：\n'+'\n'.join(errors[:10]) if errors else '')
+        self.run('正在整理文献',work,lambda result:messagebox.showinfo('导入完成',result,parent=self.win))
 
     def show_context_menu(self,event):
         rid=self.tree.identify_row(event.y)
@@ -204,14 +240,15 @@ class LibraryWindow:
         if rid not in self.tree.selection():self.tree.selection_set(rid)
         self.tree.focus(rid);self.detail()
         for index in range(self.context_menu.index('end')+1):
-            self.context_menu.entryconfigure(index,state='disabled' if self.busy else 'normal')
+            if self.context_menu.type(index)!='separator':
+                self.context_menu.entryconfigure(index,state='disabled' if self.busy else 'normal')
         try:self.context_menu.tk_popup(event.x_root,event.y_root)
         finally:self.context_menu.grab_release()
 
     def select_all(self,downloaded=False):
         if self.busy:return 'break'
         self.current_project=None;self.search.set('');self.refresh()
-        ids=[r['id'] for r in self.library.records() if not downloaded or r['attachments']]
+        ids=[r['id'] for r in self.library.records() if not downloaded or any(a.get('role')=='primary' for a in readable_attachments(r))]
         self.tree.selection_set(ids)
         self.status.set(f'已选择全库 {len(ids)} 篇'+('已下载文献' if downloaded else '文献')+'；可点击“按规则重新命名”。')
         return 'break'
@@ -220,11 +257,11 @@ class LibraryWindow:
         if self.busy:return
         ids=self.selected()
         if not ids:return
-        records=[self.library.get(rid) for rid in ids];downloaded=[r for r in records if r['attachments']]
-        if not downloaded:self.status.set('所选文献尚未下载 PDF，没有文件可重命名。');return
+        records=[self.library.get(rid) for rid in ids];downloaded=[r for r in records if local_attachments(r)]
+        if not downloaded:self.status.set('所选文献没有本地附件可重命名，网址链接保持不变。');return
         preview=[]
         for r in downloaded[:6]:
-            preview.append(Path(r['attachments'][0]['path']).name+'\n→ '+self.library.target(r).name)
+            for attachment in local_attachments(r)[:3]:preview.append(Path(attachment['path']).name+'\n→ '+self.library.target(r,attachment).name)
         skipped=len(records)-len(downloaded)
         if not messagebox.askyesno('按规则重新命名',f'将对 {len(downloaded)} 篇文献的已归档附件应用各自主课题的命名规则。\n未下载的 {skipped} 篇跳过；原始导入文件不改动。\n\n'+'\n\n'.join(preview)+'\n\n同名文件会自动添加后缀。继续？',parent=self.win):return
         def work(lib):
@@ -232,7 +269,7 @@ class LibraryWindow:
             for r in downloaded:
                 try:count+=len(lib.rename(r['id']))
                 except Exception as exc:errors.append(r['title'][:60]+': '+str(exc))
-            return f'已处理 {count} 个附件；跳过 {skipped} 篇无 PDF 文献。'+ ('\n未完成：\n'+'\n'.join(errors[:8]) if errors else '')
+            return f'已处理 {count} 个附件；跳过 {skipped} 篇无本地附件文献。'+ ('\n未完成：\n'+'\n'.join(errors[:8]) if errors else '')
         self.run('正在按规则重新命名',work,lambda result:messagebox.showinfo('重命名完成',result,parent=self.win))
 
     def download_selected(self,archive=False):
@@ -244,7 +281,7 @@ class LibraryWindow:
         if self.busy:self.status.set('下载 / 归档仍在进行，请等待完成。');return
         def done(result):
             if result['kind'] in ('downloaded','existing'):
-                self.status.set(('已归档：' if result['kind']=='downloaded' else '已有归档 PDF：')+result['path'])
+                self.status.set(('已归档：' if result['kind']=='downloaded' else '已有归档正文：')+result['path'])
                 if read_after and getattr(self,'on_reader',None):self.on_reader(rid)
             elif result['kind']=='browser':
                 try:opened=webbrowser.open(result['url'])
@@ -277,10 +314,10 @@ class LibraryWindow:
     def open_pdf(self):
         rid=self.selected(True)
         if not rid:return
-        attachments=self.library.get(rid)['attachments']
-        if not attachments:self.status.set('此条目尚无 PDF，可关联已下载文件。');return
+        attachment=self.library.primary_attachment(rid)
+        if not attachment:self.status.set('此条目尚无正文，请在“附件 / 比对”中添加 PDF / Word 并设为正文。');return
         if getattr(self,'on_reader',None):self.on_reader(rid);return
-        try:os.startfile(self.library.root/attachments[0]['path'])
+        try:os.startfile(self.library.root/attachment['path'])
         except OSError as exc:messagebox.showerror('打开失败',str(exc),parent=self.win)
 
     def new_record(self):self.edit_record(None)
@@ -337,13 +374,13 @@ class LibraryWindow:
             except Exception as exc:messagebox.showerror('模板',str(exc),parent=dialog);return
             if batch:
                 records=self.library.records(scope)
-                sample='\n'.join(f"{r['attachments'][0]['path']}\n→ {filename(r,self.library.project(r['primary_project'])['name'],t,n)}" for r in records[:8] if r['attachments'])
+                sample='\n'.join(f"{a['path']}\n→ {self.library.target(r,a,template=t,title_length=n).name}" for r in records[:8] for a in local_attachments(r)[:2])
                 if not messagebox.askyesno('重命名预览',sample+'\n\n确认对当前范围全部附件应用？原始导入文件保持不变。',parent=dialog):return
             if scope:
                 with self.library.db:self.library.db.execute('UPDATE projects SET template=? WHERE id=?',(t,scope))
             else:self.library.set_setting('template',t)
             self.library.set_setting('title_length',n);dialog.destroy()
-            if batch:self.run('重命名已归档 PDF',lambda lib:sum(len(lib.rename(r['id'])) for r in lib.records(scope)),lambda count:self.status.set(f'已重命名 {count} 个文件；操作记录保存在本地数据库。'))
+            if batch:self.run('重命名本地附件',lambda lib:sum(len(lib.rename(r['id'])) for r in lib.records(scope)),lambda count:self.status.set(f'已重命名 {count} 个文件。'))
         buttons=ttk.Frame(panel);buttons.pack(fill='x');ttk.Button(buttons,text='保存（用于后续导入）',command=save).pack(side='left');ttk.Button(buttons,text='预览并批量应用',command=lambda:save(True)).pack(side='right')
 
     def graph(self):

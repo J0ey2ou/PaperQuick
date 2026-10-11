@@ -7,7 +7,7 @@ from library_ui import LibraryWindow
 from app import App
 from graph_ui import GraphPage
 from reader_ui import ReaderPage
-from ui_theme import opening_animation
+from ui_theme import opening_animation,apply_skin
 root=tk.Tk();app=App(root);root.title('文献直达 · UI演示')
 root.geometry('1400x920+50+30')
 app.preferences={};app.email=''
@@ -28,6 +28,7 @@ app.reader_page.open(rid)
 window.status.set('界面演示 · 使用虚构文献示例 · 本地离线工作区')
 window.tree.selection_set(window.tree.get_children()[0]);window.detail()
 opening_animation(root)
+if len(sys.argv)>2:app.skin=apply_skin(root,sys.argv[2])
 if len(sys.argv)>1:
     if sys.argv[1]=='summary':root.after(500,app.show_summary)
     else:app.show_page(sys.argv[1])

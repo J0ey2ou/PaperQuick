@@ -1,0 +1,16 @@
+PaperQuick offline citation resources
+
+citeproc-js 2.4.63, Frank Bennett and contributors; CPAL-1.0 or AGPL-3.0.
+https://github.com/Juris-M/citeproc-js — see CITEPROC-LICENSE.
+
+Citation Style Language styles and locales, individual authors and CSL project;
+Creative Commons Attribution-ShareAlike 3.0 Unported.
+https://github.com/citation-style-language/styles
+https://github.com/citation-style-language/locales
+Original author, rights and source metadata remain in each unmodified XML file.
+See CSL-STYLES-LICENSE and CSL-LOCALES-LICENSE.
+
+Node.js v24.19.0, Node.js contributors; MIT and bundled third-party licenses.
+https://nodejs.org — see NODE-LICENSE.
+
+Pinned upstream revisions and checksums are recorded in manifest.json.

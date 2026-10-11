@@ -52,8 +52,9 @@ def matched_paper(record, papers):
 
 def resolve_download(library, rid, preferred_url=None, lookup=False, email='', open_page=False):
     record = library.get(rid)
-    if record['attachments'] and not open_page:
-        return {'kind': 'existing', 'path': str(library.root / record['attachments'][0]['path'])}
+    primary=library.primary_attachment(rid)
+    if primary and not open_page and (library.root/primary['path']).is_file():
+        return {'kind': 'existing', 'path': str(library.root / primary['path'])}
     links = [x for x in record.get('links', []) if safe_link(x.get('url'))]
     pdfs = [x for x in links if x.get('kind') == 'pdf']
     if open_page and (links or record.get('doi')):

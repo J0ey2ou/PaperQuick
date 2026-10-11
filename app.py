@@ -31,7 +31,6 @@ class App:
         root.geometry("1320x920")
         root.minsize(1120, 800)
         root.configure(bg=BG)
-        root.option_add("*Font", (FONT, 10))
         self.events = queue.Queue()
         self.result = None
         self.busy = False
@@ -53,6 +52,8 @@ class App:
         self.summary_view=None;self.summary_dialog=None;self.settings_page=None
         from reading_stats import ReadingClock
         self.reading_clock=ReadingClock(lambda:self.library_directory)
+        from tracking_runtime import TrackingCoordinator
+        self.tracking=TrackingCoordinator(root,lambda:self.library_directory)
         self.current_page = 'query'
         navigation=tk.Frame(root,bg=BG)
         navigation.pack(fill='x',padx=26,pady=(18,8))
@@ -76,7 +77,7 @@ class App:
         ttk.Button(header, text="右键工具", command=self.extension_help).pack(side="right", padx=8)
         ttk.Button(header, text="全局快捷键", command=self.start_selection_helper).pack(side="right")
 
-        tk.Label(page,text="PAPERQUICK  /  RESEARCH WORKSPACE",bg=BG,fg=BLUE,font=('Segoe UI',9,'bold'),anchor='w').pack(fill='x',padx=28,pady=(0,12))
+        tk.Label(page,text="收到一篇文献，顺手开始阅读",bg=BG,fg=BLUE,font=(FONT,10),anchor='w').pack(fill='x',padx=28,pady=(0,12))
         box = tk.Frame(page, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         box.pack(fill="x", padx=28)
         tk.Label(box, text="粘贴论文标题、DOI、arXiv 链接或推送链接", bg=PANEL, fg=FG, anchor="w", font=(FONT, 11, "bold")).pack(fill="x", padx=18, pady=(15, 8))
@@ -146,6 +147,7 @@ class App:
             self.library_window = LibraryWindow(self.page_host, self.library_directory, embedded=True)
             self.library_window.on_graph=lambda:self.show_page('graph')
             self.library_window.on_reader=self.open_reader
+            self.library_window.on_compare=self.open_attachment
             self.library_window.lookup_email=lambda:self.email
         self.show_page('library')
         if paper:
@@ -182,16 +184,20 @@ class App:
         from summary_ui import SummaryView
         from ui_theme import apply_skin
         dialog=tk.Toplevel(self.root);self.summary_dialog=dialog
-        dialog.title('阅读总结 · 昨日回顾');dialog.minsize(860,560);dialog.transient(self.root)
+        dialog.title('阅读总结 · 发现下一篇好文献');dialog.minsize(1020,720);dialog.transient(self.root)
         self.root.update_idletasks()
-        x=max(0,self.root.winfo_rootx()+(self.root.winfo_width()-920)//2)
-        y=max(0,self.root.winfo_rooty()+(self.root.winfo_height()-740)//2)
-        dialog.geometry(f'920x740+{x}+{y}');style_dialog(dialog)
-        self.summary_view=SummaryView(dialog,self.library_directory)
-        self.summary_view.frame.pack(fill='both',expand=True);self.summary_view.refresh()
+        width=min(1160,self.root.winfo_screenwidth()-60);height=min(860,self.root.winfo_screenheight()-90)
+        x=max(0,self.root.winfo_rootx()+(self.root.winfo_width()-width)//2)
+        y=max(0,self.root.winfo_rooty()+(self.root.winfo_height()-height)//2)
+        dialog.geometry(f'{width}x{height}+{x}+{y}');style_dialog(dialog)
         def dismiss():
+            if self.summary_view:self.summary_view.close()
             dialog.destroy();self.summary_dialog=None;self.summary_view=None
             self.root.focus_force()
+        def read(rid):dismiss();self.open_reader(rid)
+        def query(value):dismiss();self.query_reference(value)
+        self.summary_view=SummaryView(dialog,self.library_directory,on_read=read,on_query=query,coordinator=self.tracking)
+        self.summary_view.frame.pack(fill='both',expand=True);self.summary_view.refresh()
         dialog.protocol('WM_DELETE_WINDOW',dismiss);dialog.bind('<Escape>',lambda _:dismiss())
         apply_skin(self.root,self.skin);dialog.lift();dialog.focus_force()
 
@@ -208,7 +214,14 @@ class App:
     def open_reader(self,rid):
         self.show_page('reader')
         try:self.reader_page.open(rid)
-        except Exception as exc:messagebox.showerror('PDF 未打开',str(exc),parent=self.root)
+        except Exception as exc:messagebox.showerror('文档未打开',str(exc),parent=self.root)
+
+    def open_attachment(self,rid,attachment):
+        self.show_page('reader')
+        try:
+            if self.reader_page.rid!=rid:self.reader_page.open(rid)
+            self.reader_page.compare_attachment(attachment)
+        except Exception as exc:messagebox.showerror('附件未打开',str(exc),parent=self.root)
 
     def query_reference(self,query):
         self.show_page('query');self.input.delete('1.0','end');self.input.insert('1.0',query)
@@ -227,15 +240,27 @@ class App:
         else:self.open_url(link.url)
 
     def close(self):
+        word=getattr(self.library_window,'word_citations',None)
+        if word and word.busy:
+            word.status.set('Word 引用仍在处理，完成后即可退出。');return
         if self.library_window and self.library_window.busy:
             self.library_window.status.set('归档操作仍在进行，完成后可退出。');return
+        for window in (getattr(self.library_window,'attachment_window',None),getattr(self.library_window,'conversion_window',None)):
+            if window and not window.closed and window.busy:
+                window.win.lift();return
         if self.reader_page:
-            try:self.reader_page.close()
+            try:
+                if self.reader_page.close() is False:return
             except Exception as exc:messagebox.showerror('笔记未保存',str(exc),parent=self.root);return
         try:self.reading_clock.stop()
         except Exception as exc:messagebox.showerror('阅读统计未保存',str(exc),parent=self.root);return
+        if word and not word.closed:word.close()
+        for window in (getattr(self.library_window,'attachment_window',None),getattr(self.library_window,'conversion_window',None)):
+            if window and not window.closed:window.close()
         if self.library_window:self.library_window.library.close()
         if self.graph_page:self.graph_page.close()
+        if self.summary_view:self.summary_view.close()
+        self.tracking.close()
         if getattr(self,'desktop',None):self.desktop.close()
         self.root.destroy()
 
@@ -604,6 +629,76 @@ def main():
         root.destroy()
         Path(sys.argv[2]).write_text(json.dumps({'passed':True,'checks':['bundled PDFium DLL','local PDF rendering','reader UI imports','native graph UI imports','new mascot icon']}),'utf-8')
         return
+    if len(sys.argv)==3 and sys.argv[1]=='--verify-discovery-bundle':
+        import tempfile
+        from library_core import Library
+        from summary_ui import SummaryView
+        from citation_tracking import find_related
+        from literature_tracking import TrackingStore,run_check
+        root.withdraw()
+        with tempfile.TemporaryDirectory(dir=app_dir()) as temp:
+            lib=Library(Path(temp)/'store');lib.save({'title':'Fictional nutrition study','keywords':'nutrition; dietary patterns'})
+            store=TrackingStore(lib);tid=store.save_topic('Bundle topic','TITLE_ABS:nutrition')
+            result=run_check(store,tid,fetcher=lambda *a,**kw:{'items':[{'title':'Fictional discovery','doi':'10.9999/fixture'}],'total':1})
+            assert result['status']=='complete';assert len(store.results(result['run_id']))==1
+            view=SummaryView(root,lib.root);view.refresh();root.update_idletasks()
+            assert len(view.tabs.tabs())==4 and view.queries['pubmed']
+            assert find_related({},[])['items']==[]
+            view.close();lib.close()
+        root.destroy();Path(sys.argv[2]).write_text(json.dumps({'passed':True,'checks':['summary popup','local keywords','four search queries','tracking history','citation modules']}),'utf-8');return
+    if len(sys.argv)==3 and sys.argv[1]=='--verify-word-bundle':
+        import tempfile
+        from library_core import Library
+        from word_citation_ui import WordCitationsWindow
+        from citation_styles import list_styles,format_document,asset_directory
+        from citation_metadata import to_csl
+        from word_bridge import health
+        root.withdraw()
+        styles=list_styles();assert len(styles)>=31
+        item=to_csl({'id':'fixture','title':'Fictional citation example','authors_structured':[{'family':'Chen','given':'Lin'}],'year':'2025','venue':'Example Journal','volume':'7','pages':'12-18'})
+        for style in ('apa','vancouver-nlm','china-national-standard-gb-t-7714-2015-numeric'):
+            result=format_document({'fixture':item},[{'id':'check','items':[{'id':'fixture'}]}],style)
+            assert result['citations']['check'].startswith('{\\rtf') and 'Fictional citation example' in result['plain_bibliography']
+        assert health()['installed']
+        assert (asset_directory()/'vendor'/'node.exe').is_file()
+        with tempfile.TemporaryDirectory(dir=app_dir()) as temp:
+            lib=Library(Path(temp)/'store');lib.save({'title':'Fictional citation example'});lib.close()
+            window=WordCitationsWindow(root,Path(temp)/'store');root.update_idletasks();assert len(window.tree.get_children())==1;window.close()
+        root.destroy();Path(sys.argv[2]).write_text(json.dumps({'passed':True,'frozen':bool(getattr(sys,'frozen',False)),'styles':len(styles),'checks':['portable offline CSL runtime','APA / Vancouver / GB citation rendering','Word bridge binary','Word citation dialog']}),'utf-8');return
+    if len(sys.argv)==3 and sys.argv[1]=='--verify-documents-bundle':
+        import tempfile,zipfile
+        from library_core import Library
+        from document_conversion import health,can_convert,convert_document
+        from attachment_ui import AttachmentManager
+        from document_conversion_ui import ConversionWindow
+        root.withdraw()
+        assert health()['helper']
+        with tempfile.TemporaryDirectory(dir=app_dir()) as temp:
+            source=Path(temp)/'fictional.docx'
+            with zipfile.ZipFile(source,'w') as archive:
+                archive.writestr('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+                archive.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Fictional Word archive check</w:t></w:r></w:p></w:body></w:document>')
+            lib=Library(Path(temp)/'store');rid=lib.import_document(source)
+            lib.add_attachment_link(rid,'https://example.org/supplement','Fictional supplement')
+            assert lib.primary_attachment(rid)['kind']=='docx'
+            assert len(lib.get(rid)['attachments'])==2
+            assert can_convert(source,'.pdf') and can_convert('sample.pdf','.docx')
+            from pypdf import PdfWriter
+            from pypdf.generic import DictionaryObject,NameObject,DecodedStreamObject
+            pdf=Path(temp)/'fictional.pdf';writer=PdfWriter();page=writer.add_blank_page(300,400)
+            font=DictionaryObject({NameObject('/Type'):NameObject('/Font'),NameObject('/Subtype'):NameObject('/Type1'),NameObject('/BaseFont'):NameObject('/Helvetica')})
+            page[NameObject('/Resources')]=DictionaryObject({NameObject('/Font'):DictionaryObject({NameObject('/F1'):writer._add_object(font)})})
+            content=DecodedStreamObject();content.set_data(b'BT /F1 12 Tf 25 350 Td (Fictional conversion check) Tj ET');page[NameObject('/Contents')]=writer._add_object(content)
+            writer.add_blank_page(300,400)
+            with pdf.open('wb') as stream:writer.write(stream)
+            for mode in ('text','appearance'):
+                output=convert_document(pdf,Path(temp)/(mode+'.docx'),mode=mode)
+                with zipfile.ZipFile(output) as archive:
+                    assert 'word/document.xml' in archive.namelist()
+                    assert any(name.startswith('word/media/') for name in archive.namelist())
+            manager=AttachmentManager(root,lib.root,rid);root.update_idletasks();manager.close()
+            conversion=ConversionWindow(root,lib.root,rid=rid,source=source);root.update_idletasks();conversion.close();lib.close()
+        root.destroy();Path(sys.argv[2]).write_text(json.dumps({'passed':True,'frozen':bool(getattr(sys,'frozen',False)),'checks':['Word import and primary attachment','supplement URL association','attachment manager UI','conversion UI and helper binary','local PDF to Word in both modes']}),'utf-8');return
     app = App(root)
     if instance:
         from desktop_runtime import DesktopRuntime

@@ -16,10 +16,13 @@ class ReaderPage:
         self.directory=Path(directory);self.on_query=on_query;self.on_collect=on_collect
         self.frame=tk.Frame(parent,bg=BG);self.events=queue.Queue();self.rid=None;self.path=None;self.page=0;self.count=0;self.scale=1.2;self.generation=0;self.references=[];self.loading=False;self.dirty=False;self.note_job=None
         self.annotations=[];self.selection_start=None;self.image_size=None;self.fit_pending=True
+        self.source_path=None;self._import_busy=False;self._preview_jobs=[];self.attachment_manager=None;self.conversion_window=None;self.comparison=None;self.notes_visible=True;self.closed=False;self._compare_layout_token=0
         header=ttk.Frame(self.frame,padding=(24,14));header.pack(fill='x')
         title=ttk.Frame(header);title.pack(side='left');ttk.Label(title,text='文献阅读',font=(FONT,21,'bold')).pack(anchor='w')
-        self.title=tk.StringVar(value='打开 PDF，在这里阅读与记录想法');ttk.Label(title,textvariable=self.title,style='Muted.TLabel',wraplength=830).pack(anchor='w',pady=(5,0))
-        ttk.Button(header,text='打开本地 PDF',command=self.choose_pdf).pack(side='right');ttk.Button(header,text='参考文献侧栏',command=self.reference_panel).pack(side='right',padx=8)
+        self.title=tk.StringVar(value='打开 PDF 或 Word，在这里阅读与记录想法');ttk.Label(title,textvariable=self.title,style='Muted.TLabel',wraplength=670).pack(anchor='w',pady=(5,0))
+        ttk.Button(header,text='打开 PDF / Word',command=self.choose_pdf).pack(side='right');ttk.Button(header,text='参考文献侧栏',command=self.reference_panel).pack(side='right',padx=8)
+        document_tools=ttk.Frame(self.frame,padding=(24,0,24,8));document_tools.pack(fill='x')
+        for label,command in [('正文与附件',self.attachment_panel),('附件比对',self.toggle_comparison),('Word / PDF 转换',self.conversion),('显示 / 收起笔记',self.toggle_notes)]:ttk.Button(document_tools,text=label,command=command).pack(side='left',padx=(0,8))
         toolbar=ttk.Frame(self.frame,padding=(24,0,24,10));toolbar.pack(fill='x')
         for label,command in [('上一页',lambda:self.change_page(-1)),('下一页',lambda:self.change_page(1)),('缩小',lambda:self.zoom(.85)),('放大',lambda:self.zoom(1.18)),('保存笔记',self.save_notes)]:ttk.Button(toolbar,text=label,command=command).pack(side='left',padx=(0,8))
         ttk.Button(toolbar,text='适合宽度',command=self.fit_width).pack(side='left',padx=(0,8))
@@ -34,8 +37,8 @@ class ReaderPage:
         ttk.Button(tools,text='跳转页',command=self.jump,width=7).pack(side='left')
         ttk.Button(tools,text='加书签',command=self.add_bookmark,width=7).pack(side='left',padx=6)
         body=ttk.Frame(self.frame,padding=(24,0));body.pack(fill='both',expand=True)
-        splitter=ttk.Panedwindow(body,orient='horizontal');splitter.pack(fill='both',expand=True)
-        notes_panel=ttk.Frame(splitter,style='Card.TFrame',padding=12,width=340)
+        splitter=ttk.Panedwindow(body,orient='horizontal');self.splitter=splitter;splitter.pack(fill='both',expand=True)
+        notes_panel=ttk.Frame(splitter,style='Card.TFrame',padding=12,width=340);self.notes_panel=notes_panel
         ttk.Label(notes_panel,text='阅读笔记',style='Card.TLabel',font=(FONT,12,'bold')).pack(anchor='w')
         self.note_status=tk.StringVar(value='笔记保存在本地文献库');ttk.Label(notes_panel,textvariable=self.note_status,style='CardMuted.TLabel',wraplength=300).pack(anchor='w',pady=(8,12))
         self.notebook=ttk.Notebook(notes_panel);self.notebook.pack(fill='both',expand=True)
@@ -60,7 +63,7 @@ class ReaderPage:
         annotation_buttons=ttk.Frame(self.annotation_tab);annotation_buttons.pack(fill='x',pady=8)
         for i,(label,command) in enumerate([('定位',self.locate_annotation),('编辑',self.edit_annotation),('删除',self.delete_annotation)]):ttk.Button(annotation_buttons,text=label,command=command,width=6).grid(row=0,column=i,sticky='ew');annotation_buttons.columnconfigure(i,weight=1)
         ttk.Label(self.annotation_tab,text='在 PDF 上拖框高亮或批注；双击列表回到原页。\n批注保存在本地库，原 PDF 保持原样。',wraplength=300,style='Muted.TLabel').pack(fill='x',pady=5)
-        viewer=ttk.Frame(splitter,style='Card.TFrame');splitter.add(viewer,weight=4);splitter.add(notes_panel,weight=1)
+        viewer=ttk.Frame(splitter,style='Card.TFrame');self.viewer=viewer;splitter.add(viewer,weight=4);splitter.add(notes_panel,weight=1)
         self.canvas=tk.Canvas(viewer,bg='#142137',highlightthickness=0)
         v=ttk.Scrollbar(viewer,orient='vertical',command=self.canvas.yview);h=ttk.Scrollbar(viewer,orient='horizontal',command=self.canvas.xview)
         self.canvas.configure(yscrollcommand=v.set,xscrollcommand=h.set);v.pack(side='right',fill='y');h.pack(side='bottom',fill='x');self.canvas.pack(fill='both',expand=True)
@@ -72,20 +75,25 @@ class ReaderPage:
         self.reading_menu.add_command(label='在此处添加批注',command=self.context_comment)
         self.reading_menu.add_command(label='添加当前页书签',command=self.add_bookmark)
         self.canvas.bind('<Button-3>',self.reading_context)
-        self.status=tk.StringVar(value='PDF 渲染、笔记与参考文献提取均在本机进行')
+        self.status=tk.StringVar(value='安心阅读，笔记自动保存')
         ttk.Label(self.frame,textvariable=self.status,style='Muted.TLabel',padding=(24,12)).pack(fill='x')
-        self.canvas.create_text(260,200,text='从文献分类或图谱打开 PDF\n也可点击“打开本地 PDF”',fill=MUTED,font=(FONT,14),justify='center')
+        self.canvas.create_text(260,200,text='从文献分类或图谱打开文档\n也可点击“打开 PDF / Word”',fill=MUTED,font=(FONT,14),justify='center')
         self.frame.after(100,self.poll)
 
-    def open(self,rid):
+    def open(self,rid,record_read=True):
+        if self.busy:raise ValueError('正在收纳或转换文档，请完成后再切换文献。')
+        if self.rid and self.rid!=rid:
+            for window in (self.attachment_manager,self.conversion_window):
+                if window and not window.closed:window.close()
         if getattr(self,'on_document_change',None):self.on_document_change()
         self.save_notes()
         lib=Library(self.directory)
         try:
             record=lib.get(rid)
-            if not record['attachments']:raise ValueError('这篇文献尚未归档 PDF。')
-            self.rid=rid;self.attachment_id=record['attachments'][0]['id'];self.path=self.directory/record['attachments'][0]['path'];self.page=0;self.count=0;self.generation+=1;self.loading=True;self.fit_pending=True
-            lib.save({'read_count':record.get('read_count',0)+1,'last_read':time.time()},rid=rid)
+            attachment=lib.primary_attachment(rid)
+            if not attachment:raise ValueError('这篇文献尚未添加正文。请在“正文与附件”中添加 PDF 或 Word，并设为正文。')
+            self.rid=rid;self.attachment_id=attachment['id'];self.source_path=self.directory/attachment['path'];self.path=None;self.page=0;self.count=0;self.generation+=1;self.loading=True;self.fit_pending=True;self.image_size=None
+            if record_read:lib.save({'read_count':record.get('read_count',0)+1,'last_read':time.time()},rid=rid)
             self.title.set(record['title']);self.notes.configure(state='normal');self.notes.delete('1.0','end');self.notes.insert('1.0',record.get('notes',''));self.notes.edit_reset();self.notes.edit_modified(False);self.dirty=False
             for tag,ranges in record.get('note_styles',{}).items():
                 if tag in ('bold','italic'):
@@ -93,25 +101,32 @@ class ReaderPage:
                         try:self.notes.tag_add(tag,start,end)
                         except tk.TclError:pass
             self.annotations=record.get('annotations',[]);self.last_selection=None;self.refresh_annotations()
-            self.references=record.get('references',[]);self.note_status.set('自动保存已启用 · 笔记保存在本机')
+            self.references=record.get('references',[]);self.note_status.set('笔记会自动保存')
         finally:lib.close()
-        generation=self.generation;path=self.path;self.status.set('正在本地读取 PDF…')
+        self.hide_comparison();self.canvas.delete('all');self.page_label.set('正在打开文档…')
+        generation=self.generation;source=self.source_path;scale=self.scale;self.status.set('正在准备 Word 阅读预览…' if source.suffix.lower() in ('.doc','.docx') else '正在本地读取 PDF…')
+        preview_done=threading.Event()
+        if source.suffix.lower() in ('.doc','.docx'):self.register_preview(preview_done)
         def job():
             try:
-                count=document_info(path);image=render_page(path,0,self.scale);self.events.put(('page',generation,(count,0,image)))
+                from document_conversion import preview_pdf
+                try:path=preview_pdf(source,self.directory/'cache'/'document-previews')
+                finally:preview_done.set()
+                count=document_info(path);image=render_page(path,0,scale);self.events.put(('prepared',generation,(path,count,0,image)))
                 text=extract_text(path);refs=parse_references(text);self.events.put(('references',generation,(text,refs)))
-            except Exception as exc:self.events.put(('error',generation,str(exc)))
+            except Exception as exc:preview_done.set();self.events.put(('error',generation,str(exc)))
         threading.Thread(target=job,daemon=True).start()
 
     def choose_pdf(self):
-        source=filedialog.askopenfilename(parent=self.frame,filetypes=[('PDF','*.pdf')])
+        if self._import_busy:return
+        source=filedialog.askopenfilename(parent=self.frame,filetypes=[('PDF / Word','*.pdf *.doc *.docx')])
         if not source:return
-        self.status.set('正在本地归档 PDF…')
+        self._import_busy=True;self.status.set('正在本地收纳文档…')
         def job():
             lib=None
             try:
-                lib=Library(self.directory);rid=lib.import_pdf(source,lib.projects()[0]['id']);self.events.put(('open',0,rid))
-            except Exception as exc:self.events.put(('error',self.generation,str(exc)))
+                lib=Library(self.directory);rid=lib.import_document(source,lib.projects()[0]['id']);self.events.put(('open',0,rid))
+            except Exception as exc:self.events.put(('import_error',0,str(exc)))
             finally:
                 if lib:lib.close()
         threading.Thread(target=job,daemon=True).start()
@@ -123,6 +138,7 @@ class ReaderPage:
 
     def zoom(self,factor):
         if not self.path or self.loading:return
+        self._compare_layout_token+=1  # A user's zoom takes precedence over the initial split-layout fit.
         self.scale=max(.45,min(3,self.scale*factor));self.render()
 
     def render(self):
@@ -130,33 +146,41 @@ class ReaderPage:
         lib=Library(self.directory)
         try:
             attachment=next(a for a in lib.get(self.rid)['attachments'] if a['id']==self.attachment_id)
-            self.path=self.directory/attachment['path']
+            self.source_path=self.directory/attachment['path']
+            if self.source_path.suffix.lower()=='.pdf':self.path=self.source_path
         except (ValueError,StopIteration) as exc:
             self.status.set('附件不可用，请重新打开文献：'+str(exc));return
         finally:lib.close()
-        self.loading=True;generation=self.generation;page=self.page;path=self.path;scale=self.scale;self.status.set('正在渲染页面…')
+        self.loading=True;generation=self.generation;page=self.page;path=self.path;scale=self.scale;self.status.set('正在打开这一页…')
         def job():
             try:self.events.put(('page',generation,(self.count,page,render_page(path,page,scale))))
             except Exception as exc:self.events.put(('error',generation,str(exc)))
         threading.Thread(target=job,daemon=True).start()
 
     def poll(self):
+        if self.closed:return
         try:
             while True:
                 kind,generation,value=self.events.get_nowait()
-                if kind=='open':self.open(value);continue
+                if kind=='open':self._import_busy=False;self.open(value);continue
+                if kind=='import_error':self._import_busy=False;self.status.set('导入未完成：'+value);continue
                 if generation!=self.generation:continue
-                if kind=='page':
+                if kind in ('page','prepared'):
+                    if kind=='prepared':self.path=value[0];value=value[1:]
                     from PIL import ImageTk
                     self.loading=False;self.count,self.page,image=value;self.photo=ImageTk.PhotoImage(image,master=self.frame)
                     self.image_size=(image.width,image.height)
                     self.canvas.delete('all');self.canvas.create_image(18,18,image=self.photo,anchor='nw');self.canvas.configure(scrollregion=(0,0,image.width+36,image.height+36));self.canvas.yview_moveto(0);self.canvas.xview_moveto(0);self.draw_annotations()
                     self.page_input.set(str(self.page+1))
-                    self.page_label.set(f'第 {self.page+1} / {self.count} 页 · {round(self.scale*100)}%');self.status.set('本地 PDF 阅读 · 笔记自动保存')
+                    self.page_label.set(f'第 {self.page+1} / {self.count} 页 · {round(self.scale*100)}%');self.status.set(('Word 阅读预览' if self.source_path and self.source_path.suffix.lower() in ('.doc','.docx') else '本地 PDF 阅读')+' · 笔记自动保存')
                     if self.fit_pending:self.fit_pending=False;self.fit_width()
                 elif kind=='references':
                     text,self.references=value;lib=Library(self.directory)
-                    try:lib.save({'text':text,'references':self.references},rid=self.rid)
+                    try:
+                        primary=lib.primary_attachment(self.rid)
+                        if not primary or primary['id']!=self.attachment_id:
+                            self.status.set('正文已更新，请重新打开文献阅读。');continue
+                        lib.save({'text':text,'references':self.references},rid=self.rid)
                     finally:lib.close()
                     self.status.set(f'已在本地提取 {len(self.references)} 条参考文献；标题提取结果需要核对。')
                     if getattr(self,'reference_window',None) and self.reference_window.winfo_exists():self.fill_references()
@@ -223,10 +247,12 @@ class ReaderPage:
 
     def new_paragraph(self):
         if not self.rid:self.status.set('先打开一篇 PDF，再记录笔记。');return
+        self.show_notes()
         self.notebook.select(self.note_tab);self.notes.configure(state='normal');self.notes.insert('end','\n\n' if self.notes.get('1.0','end-1c') else '');self.notes.mark_set('insert','end-1c');self.notes.see('insert');self.notes.focus_set()
 
     def insert_page(self):
         if not self.rid:return
+        self.show_notes()
         self.notebook.select(self.note_tab);self.notes.insert('insert',f'\n[第 {self.page+1} 页] ');self.notes.focus_set()
 
     def note_template(self):
@@ -277,7 +303,7 @@ class ReaderPage:
         self.annotations=[a for a in self.annotations if a['id']!=item['id']]+[item]
         try:self.persist_annotations()
         except Exception:self.annotations=previous;raise
-        self.notebook.select(self.annotation_tab);self.refresh_annotations();self.draw_annotations();self.status.set('高亮 / 批注已保存到本机')
+        self.show_notes();self.notebook.select(self.annotation_tab);self.refresh_annotations();self.draw_annotations();self.status.set('高亮 / 批注已保存到本机')
 
     def persist_annotations(self):
         lib=Library(self.directory)
@@ -385,5 +411,102 @@ class ReaderPage:
         ref=self.get_reference()
         if ref:self.on_collect(ref)
 
+    @property
+    def busy(self):
+        return self._import_busy or any(window and not window.closed and window.busy for window in (self.attachment_manager,self.conversion_window))
+
+    def can_close(self):
+        if self.busy:self.status.set('正在收纳或转换文档，完成后即可关闭。');return False
+        if any(not job.is_set() for job in self._preview_jobs):self.status.set('正在准备 Word 预览，完成后即可关闭。');return False
+        return True
+
+    def register_preview(self,done):
+        self._preview_jobs=[job for job in self._preview_jobs if not job.is_set()]+[done]
+
+    def attachment_panel(self):
+        if not self.rid:self.status.set('请先打开一篇文献，再为它添加附件。');return
+        if self.attachment_manager and not self.attachment_manager.closed:
+            self.attachment_manager.reload();self.attachment_manager.win.lift();return
+        from attachment_ui import AttachmentManager
+        self.attachment_manager=AttachmentManager(self.frame,self.directory,self.rid,on_compare=self.compare_attachment,on_changed=self.attachments_changed)
+
+    def attachments_changed(self):
+        if not self.rid:return
+        lib=Library(self.directory)
+        try:primary=lib.primary_attachment(self.rid);items=lib.get(self.rid)['attachments']
+        finally:lib.close()
+        if primary and primary['id']!=self.attachment_id:self.open(self.rid,record_read=False)
+        elif self.comparison:self.comparison.set_items(items,getattr(self.comparison,'attachment_id',None))
+
+    def compare_attachment(self,attachment):
+        if not self.rid:return
+        from attachment_ui import AttachmentPreview,readable
+        if not readable(attachment):self.status.set('这个附件暂不支持页内预览，请从附件列表选择“外部打开”。');return
+        lib=Library(self.directory)
+        try:items=lib.get(self.rid)['attachments']
+        finally:lib.close()
+        if not any(a['id']==attachment['id'] for a in items):self.status.set('这个附件不属于当前文献。请重新选择。');return
+        if self.notes_visible:self.splitter.forget(self.notes_panel);self.notes_visible=False
+        if not self.comparison:self.comparison=AttachmentPreview(self.splitter,self.directory,self.hide_comparison,on_preview_start=self.register_preview)
+        if str(self.comparison.frame) not in self.splitter.panes():self.splitter.add(self.comparison.frame,weight=4)
+        self.comparison.set_items(items,attachment['id']);self.comparison.open(attachment)
+        self._compare_layout_token+=1;layout_token=self._compare_layout_token
+        def fit_settled(previous_width=None):
+            if self.closed or not self.comparison or layout_token!=self._compare_layout_token:return
+            width=self.canvas.winfo_width()
+            if self.loading or width<100 or width!=previous_width:
+                self.frame.after(80,lambda:fit_settled(width));return
+            self.fit_width()
+            if self.comparison.loading:self.comparison.fit_pending=True
+            else:self.comparison.fit_width()
+        def resize():
+            if self.closed or not self.comparison or layout_token!=self._compare_layout_token:return
+            if len(self.splitter.panes())>1:self.splitter.sashpos(0,max(260,self.splitter.winfo_width()//2))
+            # Tk finishes pane geometry after idle callbacks; wait for a stable width.
+            self.frame.after(120,fit_settled)
+        self.frame.after_idle(resize)
+        self.status.set('正文与附件独立翻页。需要记录时可点击“显示 / 收起笔记”。')
+
+    def toggle_comparison(self):
+        if self.comparison and str(self.comparison.frame) in self.splitter.panes():self.hide_comparison();return
+        if not self.rid:self.status.set('请先打开一篇文献。');return
+        from attachment_ui import readable
+        lib=Library(self.directory)
+        try:items=[a for a in lib.get(self.rid)['attachments'] if readable(a) and a['id']!=self.attachment_id]
+        finally:lib.close()
+        if items:self.compare_attachment(items[0])
+        else:self.attachment_panel();self.status.set('先添加一份 PDF 或 Word 附件，就能与正文并排比对。')
+
+    def hide_comparison(self):
+        self._compare_layout_token+=1
+        if self.comparison:
+            if str(self.comparison.frame) in self.splitter.panes():self.splitter.forget(self.comparison.frame)
+            self.comparison.close();self.comparison=None
+        self.show_notes()
+
+    def show_notes(self):
+        if not self.notes_visible:self.splitter.add(self.notes_panel,weight=2);self.notes_visible=True
+
+    def toggle_notes(self):
+        if self.notes_visible:self.splitter.forget(self.notes_panel);self.notes_visible=False
+        else:self.show_notes()
+        self.frame.after_idle(self.fit_width)
+
+    def conversion(self):
+        if self.conversion_window and not self.conversion_window.closed:self.conversion_window.win.lift();return
+        from document_conversion_ui import ConversionWindow
+        self.conversion_window=ConversionWindow(self.frame,self.directory,self.rid,self.source_path,on_done=self.converted)
+
+    def converted(self,path,attachment):
+        if self.attachment_manager and not self.attachment_manager.closed:self.attachment_manager.reload()
+        if attachment:self.compare_attachment(attachment)
+        self.status.set('转换已完成，新文件已保存。'+('已在右侧打开比对。' if attachment else ''))
+
     def scroll(self,event):self.canvas.yview_scroll(-int(event.delta/120),'units');return 'break'
-    def close(self):self.save_notes()
+    def close(self):
+        if not self.can_close():return False
+        self.save_notes();self.closed=True;self.generation+=1
+        for window in (self.attachment_manager,self.conversion_window):
+            if window and not window.closed:window.close()
+        if self.comparison:self.comparison.close();self.comparison=None
+        return True

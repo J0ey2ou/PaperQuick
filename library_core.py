@@ -14,6 +14,9 @@ import sys
 import tempfile
 import time
 import uuid
+import urllib.parse
+import zipfile
+import xml.etree.ElementTree as ET
 
 FIELDS = ('title', 'authors', 'year', 'doi', 'venue', 'abstract', 'keywords', 'notes', 'status')
 DEFAULT_TEMPLATE = '{年份}_{第一作者}_{标题}'
@@ -53,6 +56,73 @@ def digest(path):
         for block in iter(lambda: stream.read(1024 * 1024), b''):
             h.update(block)
     return h.hexdigest()
+
+def attachment_kind(attachment):
+    """Read both migrated rows and older attachment dictionaries."""
+    if attachment.get('url') or attachment.get('kind') == 'link':
+        return 'link'
+    suffix = Path(attachment.get('path') or attachment.get('original') or '').suffix.lower().lstrip('.')
+    return suffix if suffix in ('pdf', 'docx', 'doc') else 'other'
+
+def local_attachments(record):
+    return [a for a in record.get('attachments', []) if a.get('path') and attachment_kind(a) != 'link']
+
+def readable_attachments(record):
+    return [a for a in local_attachments(record) if attachment_kind(a) in ('pdf', 'docx', 'doc')]
+
+def has_pdf(record):
+    """Whether the paper's main document is a PDF, not merely a supplement."""
+    attachments = readable_attachments(record)
+    return any(attachment_kind(a) == 'pdf' and a.get('role', 'primary' if i == 0 else 'supplement') == 'primary'
+               for i, a in enumerate(attachments))
+
+def document_metadata(path):
+    """Read Word metadata without starting Word or extracting archive members."""
+    path = Path(path)
+    if path.suffix.lower() == '.pdf':
+        return pdf_metadata(path)
+    if path.suffix.lower() == '.doc':
+        with path.open('rb') as stream:
+            if stream.read(8) != b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
+                raise ValueError('文件不是有效的 Word DOC 文档，请在 Word 中另存为 DOCX 后导入。')
+        return {'title': path.stem, 'authors': '', 'year': '', 'doi': '', 'text': '', 'references': []}
+    if path.suffix.lower() != '.docx':
+        raise ValueError('请选择 PDF、DOCX 或 DOC 文件。')
+    try:
+        with zipfile.ZipFile(path) as archive:
+            def read_xml(name, limit):
+                entry = archive.getinfo(name)
+                if entry.file_size > limit:
+                    raise ValueError('Word 文档内容过大，请精简文档后重新导入。')
+                with archive.open(entry) as stream:
+                    raw = stream.read(limit + 1)
+                if len(raw) > limit:
+                    raise ValueError('Word 文档内容过大，请精简文档后重新导入。')
+                checked = raw.replace(b'\x00', b'').upper()
+                if b'<!DOCTYPE' in checked or b'<!ENTITY' in checked:
+                    raise ValueError('此 Word 文档包含不支持的 XML 定义。')
+                return ET.fromstring(raw)
+            document = read_xml('word/document.xml', 24 * 1024 * 1024)
+            core = read_xml('docProps/core.xml', 1024 * 1024) if 'docProps/core.xml' in archive.namelist() else None
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, RuntimeError) as exc:
+        raise ValueError('无法读取 Word 文档，请检查文件是否完整，或在 Word 中另存为 DOCX。') from exc
+    namespace = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    # Only w:t is visible body text; relationship URLs, formatting and field codes are not prose.
+    paragraphs = [''.join(t.text or '' for t in p.iter(namespace + 't')).strip()
+                  for p in document.iter(namespace + 'p')]
+    text = '\n'.join(p for p in paragraphs if p)[:500000]
+    props = {child.tag.rsplit('}', 1)[-1]: (child.text or '').strip() for child in core} if core is not None else {}
+    title = props.get('title') or next((p for p in paragraphs[:5] if 8 <= len(p) <= 300), '') or path.stem
+    if title.lower().startswith(('microsoft', 'untitled')):
+        title = path.stem
+    body = re.split(r'(?im)^\s*(?:\d+[.)]?\s*)?(?:references|bibliography|literature cited|参考文献)\s*[:：]?\s*$', text, maxsplit=1)[0]
+    # References may contain many DOIs; identity comes from the document's opening only.
+    doi = re.search(r'10\.\d{4,9}/[^\s<>"\u3000]+', body[:8000])
+    year = re.search(r'\b(?:19|20)\d{2}\b', body[:5000] + ' ' + props.get('created', ''))
+    from references import parse_references
+    return {'title': title, 'authors': props.get('creator', ''), 'year': year.group() if year else '',
+            'doi': normalize_doi(doi.group().rstrip('.,;)')) if doi else '', 'text': text,
+            'references': parse_references(text)}
 
 def pdf_metadata(path):
     """Extract locally; scanned PDFs need manual metadata (no OCR service)."""
@@ -105,8 +175,25 @@ class Library:
         CREATE INDEX IF NOT EXISTS reading_sessions_time ON reading_sessions(start,end);
         ''')
         self.db.commit()
+        self._migrate_attachments()
         if not self.projects():
             self.create_project('未分类')
+
+    def _migrate_attachments(self):
+        # Serialize schema inspection and ALTERs across reader/background connections.
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            columns = {row['name'] for row in self.db.execute('PRAGMA table_info(attachments)')}
+            legacy = 'role' not in columns
+            for name, default in (('label', ''), ('role', 'supplement'), ('kind', 'pdf'), ('url', '')):
+                if name not in columns:
+                    self.db.execute(f"ALTER TABLE attachments ADD COLUMN {name} TEXT DEFAULT '{default}'")
+            if legacy:
+                self.db.execute("UPDATE attachments SET role='primary' WHERE rowid IN (SELECT MIN(rowid) FROM attachments GROUP BY paper)")
+                for row in self.db.execute('SELECT id,path FROM attachments').fetchall():
+                    kind = attachment_kind(dict(row))
+                    self.db.execute('UPDATE attachments SET kind=? WHERE id=?', (kind, row['id']))
+            self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS attachments_primary ON attachments(paper) WHERE role='primary'")
 
     def close(self):
         self.db.close()
@@ -157,7 +244,7 @@ class Library:
         data = json.loads(row['data'])
         data.update(id=row['id'], primary_project=row['primary_project'])
         data['projects'] = [r[0] for r in self.db.execute('SELECT project FROM memberships WHERE paper=?', (row['id'],))]
-        data['attachments'] = [dict(r) for r in self.db.execute('SELECT * FROM attachments WHERE paper=?', (row['id'],))]
+        data['attachments'] = [dict(r) for r in self.db.execute('SELECT * FROM attachments WHERE paper=? ORDER BY rowid', (row['id'],))]
         return data
 
     def get(self, rid):
@@ -206,30 +293,166 @@ class Library:
     def template(self, project):
         return self.project(project)['template'] or self.setting('template', DEFAULT_TEMPLATE)
 
-    def target(self, record):
+    def target(self, record, attachment=None, template=None, title_length=None):
         project = self.project(record['primary_project'])
-        return self.root / 'papers' / project['folder'] / filename(record, project['name'], self.template(project['id']), self.setting('title_length', 80))
+        base = self.root / 'papers' / project['folder'] / filename(record, project['name'],
+                 self.template(project['id']) if template is None else template,
+                 self.setting('title_length', 80) if title_length is None else title_length)
+        if attachment is None:
+            return base
+        if attachment_kind(attachment) == 'link':
+            raise ValueError('链接附件不需要重命名文件。')
+        original = Path(attachment.get('original') or attachment.get('path') or '')
+        suffix = original.suffix
+        if attachment.get('role', 'primary') == 'primary':
+            return base.with_suffix(suffix)
+        label = clean_name(attachment.get('label') or original.stem or '附件', 32)
+        return base.with_name(base.stem[:100] + '__' + label + '_' + attachment['id'][:8] + suffix)
+
+    def primary_attachment(self, rid):
+        return next((a for a in readable_attachments(self.get(rid)) if a.get('role') == 'primary'), None)
+
+    def set_primary_attachment(self, rid, aid):
+        record = self.get(rid)
+        attachment = next((a for a in readable_attachments(record) if a['id'] == aid), None)
+        if not attachment:
+            raise ValueError('请选择这篇文献中的 PDF 或 Word 文件作为正文。')
+        source = self.root / attachment['path']
+        if not source.is_file():
+            raise ValueError('这份附件已不在原来的归档位置，请重新关联文件后再设为正文。')
+        metadata = document_metadata(source)
+        with self.db:
+            self.db.execute("UPDATE attachments SET role='supplement' WHERE paper=? AND role='primary'", (rid,))
+            self.db.execute("UPDATE attachments SET role='primary' WHERE paper=? AND id=?", (rid, aid))
+            # Read the latest stored notes after obtaining the write lock, then replace only
+            # text belonging to the old primary. Attachment-scoped annotations stay intact.
+            data = json.loads(self.db.execute('SELECT data FROM papers WHERE id=?', (rid,)).fetchone()[0])
+            data.update(text=metadata.get('text', ''), references=metadata.get('references', []))
+            self.db.execute('UPDATE papers SET data=?,updated=? WHERE id=?', (json.dumps(data, ensure_ascii=False), time.time(), rid))
+            self.log('attachment-primary', {'paper': rid, 'attachment': aid})
+
+    def rename_attachment_label(self, rid, aid, label):
+        self.get(rid)
+        label = str(label).strip()[:200]
+        with self.db:
+            cursor = self.db.execute('UPDATE attachments SET label=? WHERE paper=? AND id=?', (label, rid, aid))
+            if cursor.rowcount != 1:
+                raise ValueError('附件不存在或不属于当前文献。')
+            self.log('attachment-label', {'paper': rid, 'attachment': aid, 'label': label})
+
+    def add_attachment_link(self, rid, url, label=''):
+        self.get(rid)
+        url = str(url).strip()
+        try:
+            parsed = urllib.parse.urlsplit(url)
+            valid = parsed.scheme.lower() in ('http', 'https') and parsed.hostname and parsed.port != 0
+        except ValueError:
+            valid = False
+        if not valid or re.search(r'[\x00-\x20\x7f]', url):
+            raise ValueError('请输入完整的 http:// 或 https:// 附件链接。')
+        old = self.db.execute('SELECT id FROM attachments WHERE paper=? AND url=?', (rid, url)).fetchone()
+        if old:
+            if str(label).strip():
+                self.rename_attachment_label(rid, old['id'], label)
+            return old['id']
+        aid = uuid.uuid4().hex
+        with self.db:
+            self.db.execute('INSERT INTO attachments(id,paper,path,sha,original,label,role,kind,url) VALUES(?,?,?,?,?,?,?,?,?)',
+                            (aid, rid, 'links/' + aid + '.url', '', url, str(label).strip()[:200], 'supplement', 'link', url))
+            self.log('attachment-link', {'paper': rid, 'attachment': aid, 'url': url})
+        return aid
+
+    def add_attachment(self, rid, source, label='', role='supplement'):
+        return self._add_attachment(rid, source, label, role, extract=False)
+
+    def _restore_attachment(self, attachment, source):
+        """Reimport restores a missing managed copy without changing its identity."""
+        source = Path(source).resolve()
+        target = (self.root / attachment['path']).resolve()
+        if not target.is_relative_to(self.root):
+            raise ValueError('附件记录不在本地文献库内，请重新关联文件。')
+        if target.is_file() and digest(target) == attachment['sha']:
+            return target
+        target.parent.mkdir(parents=True, exist_ok=True)
+        index = 1
+        while True:
+            dest = target if index == 1 else target.with_stem(target.stem + f' ({index})')
+            reserved = self.db.execute('SELECT id FROM attachments WHERE path=? COLLATE NOCASE AND id<>?',
+                                       (str(dest.relative_to(self.root)), attachment['id'])).fetchone()
+            if reserved:
+                index += 1
+                continue
+            created = False
+            try:
+                with source.open('rb') as input_file, dest.open('xb') as output:
+                    created = True
+                    shutil.copyfileobj(input_file, output)
+                break
+            except FileExistsError:
+                index += 1
+            except Exception:
+                if created:
+                    dest.unlink(missing_ok=True)
+                raise
+        try:
+            with self.db:
+                self.db.execute('UPDATE attachments SET path=? WHERE id=?', (str(dest.relative_to(self.root)), attachment['id']))
+                self.log('attachment-restored', {'paper': attachment['paper'], 'attachment': attachment['id'], 'path': str(dest)})
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+        return dest
 
     def attach(self, rid, source, extract=True):
+        if Path(source).suffix.lower() != '.pdf':
+            raise ValueError('请选择 PDF 文件；Word 和补充文件请使用导入文档或关联附件。')
+        primary = self.primary_attachment(rid)
+        role = 'supplement' if primary and (self.root / primary['path']).is_file() else 'primary'
+        return self._add_attachment(rid, source, '', role, extract=extract)
+
+    def _add_attachment(self, rid, source, label, role, extract=False):
+        if role not in ('primary', 'supplement'):
+            raise ValueError('附件类型必须为正文或补充附件。')
+        record = self.get(rid)
         source = Path(source).resolve()
-        metadata = pdf_metadata(source) if extract else {}
-        with source.open('rb') as stream:
-            if b'%PDF-' not in stream.read(1024):
-                raise ValueError('文件不是 PDF。')
+        if not source.is_file():
+            raise ValueError('附件文件不存在。')
+        kind = attachment_kind({'path': str(source)})
+        if role == 'primary' and kind not in ('pdf', 'docx', 'doc'):
+            raise ValueError('仅 PDF 和 Word 文档可以设为正文。')
+        metadata = {}
+        if kind == 'pdf':
+            with source.open('rb') as stream:
+                if b'%PDF-' not in stream.read(1024):
+                    raise ValueError('文件不是有效 PDF。')
+            if extract and role == 'primary':
+                metadata = pdf_metadata(source)
+        elif kind in ('docx', 'doc'):
+            metadata = document_metadata(source)
         sha = digest(source)
         existing = self.db.execute('SELECT * FROM attachments WHERE paper=? AND sha=?', (rid, sha)).fetchone()
         if existing:
-            return self.root / existing['path']
-        record = self.get(rid)
-        if metadata.get('text'):
-            self.save({'text': metadata['text'],'references':metadata.get('references',[])}, rid=rid)
-        target = self.target(record)
+            restored = self._restore_attachment(dict(existing), source)
+            if role == 'primary' and existing['role'] != 'primary':
+                self.set_primary_attachment(rid, existing['id'])
+            if str(label).strip():
+                self.rename_attachment_label(rid, existing['id'], label)
+            return restored
+        aid = uuid.uuid4().hex
+        attachment = {'id': aid, 'role': role, 'kind': kind, 'label': str(label).strip()[:200], 'original': str(source)}
+        target = self.target(record, attachment)
         target.parent.mkdir(parents=True, exist_ok=True)
         # Exclusive creation prevents accidental overwrite even for concurrent imports.
         index = 1
         while True:
             try:
                 dest = target if index == 1 else target.with_stem(target.stem + f' ({index})')
+                # Missing files still reserve their attachment path so a new version
+                # cannot reuse the old file identity or its annotation association.
+                if self.db.execute('SELECT id FROM attachments WHERE path=? COLLATE NOCASE',
+                                   (str(dest.relative_to(self.root)),)).fetchone():
+                    index += 1
+                    continue
                 with dest.open('xb') as output, source.open('rb') as input_file:
                     shutil.copyfileobj(input_file, output)
                 break
@@ -241,41 +464,86 @@ class Library:
                 raise
         try:
             with self.db:
-                self.db.execute('INSERT INTO attachments VALUES(?,?,?,?,?)', (uuid.uuid4().hex, rid, str(dest.relative_to(self.root)), sha, str(source)))
+                if role == 'primary':
+                    self.db.execute("UPDATE attachments SET role='supplement' WHERE paper=? AND role='primary'", (rid,))
+                self.db.execute('INSERT INTO attachments(id,paper,path,sha,original,label,role,kind,url) VALUES(?,?,?,?,?,?,?,?,?)',
+                                (aid, rid, str(dest.relative_to(self.root)), sha, str(source), attachment['label'], role, kind, ''))
                 self.log('attach', {'paper': rid, 'source': str(source), 'path': str(dest)})
         except Exception:
             dest.unlink()
             raise
+        if metadata.get('text') and role == 'primary':
+            self.save({'text': metadata['text'], 'references': metadata.get('references', [])}, rid=rid)
         return dest
 
-    def import_pdf(self, source, project):
+    def import_pdf(self, source, project=None):
+        project = project or self.projects()[0]['id']
         sha = digest(source)
-        old = self.db.execute('SELECT paper FROM attachments WHERE sha=?', (sha,)).fetchone()
+        old = self.db.execute('SELECT * FROM attachments WHERE sha=? ORDER BY rowid', (sha,)).fetchone()
         if old:
-            self.assign(old[0], project)
-            return old[0]
+            self._restore_attachment(dict(old), source)
+            self.assign(old['paper'], project)
+            return old['paper']
         metadata = pdf_metadata(source)
+        self._preserve_primary_text(metadata)
         rid = self.save(metadata, project)
         self.attach(rid, source, extract=False)
         return rid
 
+    def import_document(self, source, project=None):
+        source = Path(source).resolve()
+        if source.suffix.lower() == '.pdf':
+            return self.import_pdf(source, project)
+        metadata = document_metadata(source)
+        project = project or self.projects()[0]['id']
+        sha = digest(source)
+        old = self.db.execute('SELECT * FROM attachments WHERE sha=? ORDER BY rowid', (sha,)).fetchone()
+        if old:
+            self._restore_attachment(dict(old), source)
+            self.assign(old['paper'], project)
+            return old['paper']
+        self._preserve_primary_text(metadata)
+        rid = self.save(metadata, project)
+        self.add_attachment(rid, source, role='supplement' if self.primary_attachment(rid) else 'primary')
+        return rid
+
+    def _preserve_primary_text(self, metadata):
+        if metadata.get('doi'):
+            old = next((r for r in self.records() if r.get('doi') == normalize_doi(metadata['doi'])), None)
+            if old and self.primary_attachment(old['id']):
+                metadata.pop('text', None)
+                metadata.pop('references', None)
+
     def rename(self, rid):
         record = self.get(rid)
         changed = []
-        for attachment in record['attachments']:
+        for attachment in local_attachments(record):
             old = self.root / attachment['path']
-            base = self.target(record)
+            if not old.is_file():
+                with self.db:
+                    self.log('rename-missing-attachment', {'paper': rid, 'attachment': attachment['id'], 'path': str(old)})
+                continue
+            base = self.target(record, attachment)
             base.parent.mkdir(parents=True, exist_ok=True)
             new = base
             index = 2
-            while new.exists() and new.resolve() != old.resolve():
+            while ((new.exists() and new.resolve() != old.resolve()) or
+                   self.db.execute('SELECT id FROM attachments WHERE path=? COLLATE NOCASE AND id<>?',
+                                   (str(new.relative_to(self.root)), attachment['id'])).fetchone()):
                 new = base.with_stem(base.stem + f' ({index})')
                 index += 1
             if new.resolve() == old.resolve():
                 continue
             # Copy then update database; unlink only after the durable new path is recorded.
-            with new.open('xb') as output, old.open('rb') as input_file:
-                shutil.copyfileobj(input_file, output)
+            created = False
+            try:
+                with old.open('rb') as input_file, new.open('xb') as output:
+                    created = True
+                    shutil.copyfileobj(input_file, output)
+            except Exception:
+                if created:
+                    new.unlink(missing_ok=True)
+                raise
             try:
                 with self.db:
                     self.db.execute('UPDATE attachments SET path=? WHERE id=?', (str(new.relative_to(self.root)), attachment['id']))
@@ -292,7 +560,7 @@ class Library:
     def graph(self, project=None, include_candidates=True):
         records = self.records(project)
         nodes = [{'id': r['id'], 'title': r['title'], 'year': r['year'], 'status': r['status'],
-                  'doi': r['doi'], 'pdf': bool(r['attachments']), 'in_library':True,'read_count':r.get('read_count',0),
+                  'doi': r['doi'], 'pdf': any(a.get('role') == 'primary' for a in readable_attachments(r)), 'in_library':True,'read_count':r.get('read_count',0),
                   'projects': [self.project(p)['name'] for p in r['projects']]} for r in records]
         texts, df = {}, collections.Counter()
         for r in records:
@@ -361,7 +629,7 @@ class Library:
         incoming=collections.Counter(e['target'] for e in citations)
         for n in nodes:n['citation_count']=incoming[n['id']]
         return {'nodes':nodes,'edges':edges_list,
-                'summary':{'total':len(records),'pdf':sum(bool(r['attachments']) for r in records),
+                'summary':{'total':len(records),'pdf':sum(any(a.get('role') == 'primary' for a in readable_attachments(r)) for r in records),
                            'read':sum(r['status']=='已读' for r in records),'citations':len(citations),
                            'candidates':sum(not n['in_library'] for n in nodes)}}
 

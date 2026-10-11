@@ -7,7 +7,7 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 REPO = 'https://github.com/J0ey2ou/PaperQuick'
 RELEASE = REPO + '/releases/latest'
-from promo_content import TITLE, blocks
+from promo_content_v32 import TITLE, blocks
 
 def inline(value):
     value = html.escape(value)
@@ -43,7 +43,7 @@ plain_text = '\n\n'.join(plain) + '\n'
 page = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>文献直达 · 微信图文与动图示例</title><style>body{margin:0;background:#f3f6fa;color:#172c45;font:16px/1.85 "Microsoft YaHei UI",sans-serif}main{max-width:820px;margin:24px auto;padding:0 20px}nav{display:flex;gap:10px;flex-wrap:wrap;position:sticky;top:0;padding:12px 0;background:#f3f6fa;z-index:2}button,a.action{font:inherit;font-size:14px;border:0;background:#215cce;color:white;border-radius:8px;padding:10px 15px;cursor:pointer;text-decoration:none}article{background:white;border:1px solid #dce4ef;border-radius:16px;margin:20px 0;padding:32px}h1{font-size:28px;line-height:1.45}h2{font-size:21px;line-height:1.55;margin:32px 0 14px;border-left:4px solid #215cce;padding-left:12px}h3{font-size:18px;line-height:1.6;margin:24px 0 10px}p{margin:14px 0;overflow-wrap:anywhere}li{margin:10px 0}ul,ol{padding-left:24px}figure{margin:22px 0}img{width:100%;height:auto;border-radius:8px}figcaption,#status{font-size:13px;color:#5d6f84}a{color:#215cce;overflow-wrap:anywhere}small{color:#5d6f84}@media(max-width:600px){main{padding:0 12px}article{padding:22px 18px}h1{font-size:24px}}</style></head><body><main><nav><button id="rich">一键复制图文（含动图）</button><button id="text">复制纯文案</button><button id="image">复制截图</button><a class="action" id="download" download="文献直达-使用截图.png">保存截图</a><a class="action" id="gif-download" download="文献直达-选词查询演示.gif">保存动图</a></nav><p id="status" role="status">已补充完整使用方式与动图示例。支持富文本的编辑器可复制图文；微信编辑器若过滤图片 / 动图，请保存后单独上传。</p><article id="post">''' + ''.join(parts) + '''</article><small>图文、截图和 GIF 均内嵌在本页，无需加载外部图片。演示数据仅用于展示操作流程。</small></main><script>
 const post=document.getElementById('post'),status=document.getElementById('status'),picture=post.querySelector('img[data-kind="screenshot"]'),animation=post.querySelector('img[data-kind="gif"]');
 document.getElementById('download').href=picture.src;
-post.querySelectorAll('img[data-kind^="shot:"]').forEach((img,i)=>{const a=document.createElement('a');a.href=img.src;a.download='PaperQuick-使用截图-'+(i+1)+'.jpg';a.textContent='保存这张截图';img.parentElement.append(a);});document.getElementById('gif-download').href=animation.src;
+post.querySelectorAll('img[data-kind^="shot:"]').forEach((img,i)=>{const a=document.createElement('a');a.href=img.src;a.download='PaperQuick-使用截图-'+(i+1)+'.'+(img.dataset.kind.split('.').pop()||'png');a.textContent='保存这张截图';img.parentElement.append(a);});document.getElementById('gif-download').href=animation.src;
 const text=()=>{let value=post.innerText;post.querySelectorAll('figcaption,figure a').forEach(c=>value=value.replace(c.innerText,''));return value.trim();};
 const fallback=()=>{const s=window.getSelection(),r=document.createRange();r.selectNodeContents(post);s.removeAllRanges();s.addRange(r);const ok=document.execCommand('copy');s.removeAllRanges();return ok;};
 document.getElementById('rich').onclick=async()=>{

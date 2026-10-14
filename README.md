@@ -1,8 +1,10 @@
 # 文献直达 · PaperQuick
 
+**v3.3.0 阅读与整理升级**：勾选文件夹导入与撤回、可恢复删除、连续阅读与文字选择、图片 / 截图笔记、阅读区 Word / TXT 编辑、页内文献链接、可嵌入参考文献、BMJ 参考文献提取修复，以及图谱中的笔记关联。操作步骤见 [v3.3 阅读升级指南](docs/v3.3-reading.md)，本版分享文案见 [微信更新介绍](docs/微信更新文案-v3.3.md)。
+
 从导师发来的一个标题，到课题文件夹里的一篇论文，再到阅读笔记和写作引用。Windows 本地文献工作区，连接 **查询 → 下载归档 → 分类与附件 → 阅读比对 → 关系探索 → 阅读回顾 → Word 写作**。
 
-[下载 v3.2 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.2.0/PaperQuick-v3.2-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.2.0) · [v3.2 使用指南](docs/v3.2-local.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [微信图文介绍](推送文案.md)
+[下载 v3.3 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.3.0/PaperQuick-v3.3-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.3.0) · [v3.3 使用指南](docs/v3.3-reading.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [微信更新介绍](docs/微信更新文案-v3.3.md)
 
 **v3.2 新增**：Word 导入与分页预览、Word / PDF 互转、文献附件关联与并排比对、31 套 Word 引用格式，以及主题关键词、检索式、引用与被引探索和新文献追踪。
 
@@ -12,7 +14,7 @@
 
 ## 安装与升级
 
-1. 在 Releases 下载 `PaperQuick-v3.2-Windows.zip`，解压完整文件夹到可写目录。
+1. 在 Releases 下载 `PaperQuick-v3.3-Windows.zip`，解压完整文件夹到可写目录。
 2. 双击 `文献直达.exe`，保留同目录的 `全局选词助手.exe`、`browser-extension` 和说明文件。
 3. 复制一个英文标题或 DOI，在 **文献查询 → 粘贴并查找** 试用。
 4. 升级时先从托盘 **退出文献直达**，备份原文件夹，再覆盖程序文件。保留 `本地文献库`、`settings.json`、`shortcut.json`，不要用空库替换旧库。备份请在退出后复制完整 `本地文献库`，其中包含文献信息、正文、附件、笔记和阅读记录。
@@ -30,7 +32,7 @@
 ## 下载、课题分类和命名
 
 1. 查询结果点击 **收藏 / 下载归档**，选择或新建课题。可下载的直接 PDF 自动归档；需要网页操作时打开对应全文 / 出版社页面。
-2. **文献分类 → 导入 PDF / Word** 支持 PDF、DOCX、DOC；**导入文件夹** 包含子目录中的这些文档。还可手工新增条目和编辑信息。右键 **下载原文（打开下载页面）** 跳转对应页面；**下载并自动归档** 查找开放版本并保存。
+2. **文献分类 → 导入文件** 支持 PDF、DOCX、DOC、TXT、Markdown；**导入文件夹** 扫描子目录后先勾选文件再导入，支持撤回最近一批导入。还可手工新增条目和编辑信息、删除与恢复文献。右键 **下载原文（打开下载页面）** 跳转对应页面；**下载并自动归档** 查找开放版本并保存。
 3. 浏览器完成机构登录并下载的 PDF，通过 **关联已下载 PDF** 或 **导入 PDF / Word** 归档。当前不监控浏览器下载目录，不会猜测新下载文件属于哪篇文献。
 4. **命名规则** 支持 `{年份}`、`{第一作者}`、`{标题}`、`{DOI}`、`{课题}`，例如 `{年份}_{第一作者}_{标题}`。英文占位符也可用：`{year}_{author}_{title}`。
 5. 选中文献后右键 **按规则重新命名**。可使用 **选择所有文献 / 选择所有已下载文献**（全库范围，会清除筛选），或 Ctrl / Shift 多选。确认预览后批量应用各条目主课题的规则。文件保留 PDF、Word 或其他真实扩展名；补充材料带独立名称和后缀，网址附件不参与重命名。没有本地文件的条目跳过，同名文件自动加后缀；原始导入文件不改动。
@@ -48,7 +50,7 @@
 
 PDF 转 Word 在本机完成，无需安装 Word：默认 **可编辑文字** 提取可复制的正文并保留逐页分隔，不还原图表和复杂排版；没有可提取文字的扫描页以原页图片保留。**保留页面外观** 把每页作为图片放入 DOCX，页面内容可查看，文字不能直接编辑。两种模式都不提供 OCR。
 
-Word 阅读显示分页预览，不提供页内 Word 正文编辑；要修改稿件，可在附件列表点击 **外部打开**。网址在浏览器打开，表格等其他附件交给本机对应软件。Word 转 PDF 和 Word 分页预览使用本机 Word 与字体；缺失字体可能影响版式。转换结果请按用途核对。
+Word 阅读显示分页预览；点击 **编辑原文** 可在阅读框中修改文字并保存归档副本，保留上一版本和来源文件。编辑模式以文字为主，复杂排版可在附件列表点击 **外部打开** 使用 Word。网址在浏览器打开，表格等其他附件交给本机对应软件。Word 编辑、转 PDF 和分页预览使用本机 Word 与字体；缺失字体可能影响版式。转换结果请按用途核对。
 
 正文与附件共用这篇文献的阅读笔记；高亮、书签和批注跟随对应文件。将另一份附件设为正文不会把原文件批注搬到新页面，切回原文件即可继续查看。右侧比对区用于独立翻阅，不单独累加一份阅读时长。详见 [文档与附件使用指南](docs/documents-and-attachments.md)。
 
@@ -56,11 +58,11 @@ Word 阅读显示分页预览，不提供页内 Word 正文编辑；要修改稿
 
 ## 阅读、笔记、批注和参考文献
 
-- 从分类、图谱等内部入口打开正文，进入 **文献阅读**；也可点击 **打开 PDF / Word**。支持翻页、跳页、适合宽度、缩放和书签。
-- 右侧笔记可直接编辑、撤销 / 重做、加粗、斜体、插入页码、插入研究笔记模板及导出。编辑后自动保存，也可点击 **保存笔记** 或在笔记区按 Ctrl+S。
+- 从分类、图谱等内部入口打开正文，进入 **文献阅读**；也可点击打开文件。支持连续翻页、跳页、适合宽度、缩放、专注阅读和拖动调整正文 / 笔记宽度。
+- 右侧笔记可直接编辑、撤销 / 重做、加粗、斜体、插入页码、插入自定义研究笔记模板、图片、截图及导出。编辑后自动保存，也可点击 **保存笔记** 或在笔记区按 Ctrl+S。导出笔记自动关联为对应文献的笔记附件，图谱可显示笔记节点。
 - **阅读区右键 → 添加阅读笔记**，快速插入当前页记录；有当前页最近框选文字时一并带入。右键还可在点击位置添加批注和书签。
 - 阅读工具支持 **框选高亮 / 框选批注 / 复制文字**，拖出选区即可操作；批注列表支持定位、编辑、删除，颜色可选。
-- **参考文献侧栏** 可独立打开。优先保留原始编号；显示 `1*` 等星号时只是提取顺序，原编号未识别，请回原文核对。条目可查原文、下载归档或收藏到课题。
+- **参考文献侧栏** 可独立打开，也可嵌入阅读页顶部。优先保留原始编号；显示 `1*` 等星号时只是提取顺序，原编号未识别，请回原文核对。条目可查原文、下载归档或收藏到课题；本版修复 BMJ 无标题、断行 DOI 等常见提取问题。
 - 笔记、书签和批注存放在本地库，PDF 原文件不改写，其他阅读器不会自动显示本软件批注。扫描版 PDF 和复杂分栏可能无法正确提取文字或引用，当前不内置 OCR。
 
 ## 离线图谱
@@ -122,13 +124,15 @@ citeproc-js implements the Citation Style Language · © Frank Bennett. [Citatio
 
 ## English
 
+**v3.3.0 reading update:** selective folder import and undo, recoverable deletion, continuous reading, PDF text selection, image notes, in-reader Word / TXT editing, position links, docked references, BMJ bibliography fixes and note nodes in the graph. See the [v3.3 guide](docs/v3.3-reading.md#english).
+
 **PaperQuick** is a local Windows literature workspace: search, archive documents by research project, keep supplements beside papers, read and compare, explore relationships, review your reading, and insert Word citations. The Windows package needs no Python installation or account. Local organization, reading, conversion, graphs and recaps use no external AI or AI API key. Search and download require internet access.
 
 **New in v3.2:** Word import and paginated previews, Word/PDF conversion, linked files and URLs, side-by-side attachment reading, 31 Word citation styles, topic keywords, search-query building, citation exploration and topic tracking. Screenshots use fictional demonstration data.
 
 ### Install and update
 
-Download [PaperQuick-v3.2-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.2.0/PaperQuick-v3.2-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Exit from the tray before updating, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
+Download [PaperQuick-v3.3-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.3.0/PaperQuick-v3.3-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Exit from the tray before updating, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
 
 **Installed Microsoft Word for Windows is required for Word pagination, Word-to-PDF conversion and citation insertion.** PDF-to-Word conversion, PDF reading and DOCX import/storage do not require Word. WPS and Word Online are not supported substitutes for the features that require Word.
 
@@ -138,7 +142,7 @@ Download [PaperQuick-v3.2-Windows.zip](https://github.com/J0ey2ou/PaperQuick/rel
 2. **Selected text**: start the helper, select copyable text in Word/PDF/WeChat and press the configured shortcut. Change it in top-right Settings (e.g. Ctrl+Alt+J); the tray shows the active combination. For browser right-click, enable developer mode at `edge://extensions` or `chrome://extensions` and load `browser-extension` unpacked. Desktop apps use hotkeys, not a universal right-click menu.
 3. **Download**: click `收藏 / 下载归档`, choose/create a project. Direct PDFs archive automatically; otherwise the relevant full-text/publisher page opens. Library right-click offers download-page navigation or automatic download and archiving. Manually downloaded subscription PDFs must be attached/imported; browser downloads are not monitored.
 4. **Import and rename**: import PDF, DOCX or DOC, individually or from a folder and its subfolders. Configure `{year}_{author}_{title}` or Chinese tokens `{年份}_{第一作者}_{标题}`. Right-click selected records to rename managed files, preserving real extensions and distinct supplement names; URL attachments are skipped. Whole-library selection clears filters. Original files are preserved. Reimporting a missing managed copy restores the existing attachment and retains its identity, notes and annotations; different content already at that path is not overwritten.
-5. **Read**: internal document actions open the reader. Word is displayed as a paginated preview; edit its contents externally in Word. Notes autosave and support formatting, page markers, templates and export. Right-click the page to add a note, comment or bookmark. Drag regions to highlight, comment or copy text. Annotations live in the library, not inside the original document.
+5. **Read**: internal document actions open the reader, with continuous pages, text selection, focus mode and adjustable panes. Word offers pagination and a text-editing mode using installed desktop Word; saving updates the managed copy and preserves its prior version and original source. Notes autosave and support images, reading-area screenshots, custom templates and linked export. Right-click to add notes or document/web links. PaperQuick annotations live in the library; original Word/PDF comments are also visible.
 6. **References**: open the detachable panel. Original numbers are retained where recognized; `1*` indicates extraction order only. Verify before searching, collecting or downloading. Scans and complex layouts may need manual correction; OCR is not included.
 7. **Graph**: node-count slider, wheel zoom, blank-area pan, Shift box zoom, double-click neighborhood focus and reset. Candidates come from local references. Highlight by reading count, local citation count or PDF availability, with configurable colors/weights. Local citation counts are not global metrics.
 8. **Reading recap**: the title-bar `阅读总结` button opens a four-tab window without replacing your current page. Time counts only while the loaded reading page is in front of you; other apps, pages, the recap and a hidden window pause it. This is time spent on the page, not proof of attention or understanding. Time before recording began cannot be recovered. Recaps show your currently saved abstracts, notes and excerpts.

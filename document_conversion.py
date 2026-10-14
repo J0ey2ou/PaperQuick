@@ -316,7 +316,7 @@ def preview_pdf(source, cache_dir, timeout=120):
     cache_dir = Path(cache_dir).expanduser().resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
     digest = _hash(source)
-    key = hashlib.sha256(('word-preview-v1:' + source.suffix.lower() + ':' + digest).encode()).hexdigest()
+    key = hashlib.sha256(('word-preview-v2-markup:' + source.suffix.lower() + ':' + digest).encode()).hexdigest()
     destination = cache_dir / (key + '.pdf')
     with _cache_lock(cache_dir / (key + '.lock'), timeout):
         if destination.is_file() and _valid_result(destination):

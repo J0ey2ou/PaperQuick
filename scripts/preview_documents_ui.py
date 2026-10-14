@@ -122,7 +122,7 @@ def fixtures():
     return data
 
 def run():
-    parser=argparse.ArgumentParser();parser.add_argument('mode',nargs='?',default='reader',choices=['reader','convert','summary','attachments','library','graph']);parser.add_argument('--prepare-only',action='store_true');args=parser.parse_args();data=fixtures()
+    parser=argparse.ArgumentParser();parser.add_argument('mode',nargs='?',default='reader',choices=['reader','upgrade','convert','summary','attachments','library','graph']);parser.add_argument('--prepare-only',action='store_true');args=parser.parse_args();data=fixtures()
     if args.prepare_only:
         from pdf_reader_core import render_page
         for name in ('main','supplement'):
@@ -134,12 +134,16 @@ def run():
     root=tk.Tk()
     # App resolves preferences and its initial library under this fictional workspace.
     with patch('app.app_dir',return_value=Path(data['work'])):app=App(root)
-    app.library_directory=Path(data['directory']);app.preferences={};app.email='';app.skin=apply_skin(root,'极简浅色');root.geometry('1400x920+50+25');root.title('文献直达 · 功能演示')
+    app.library_directory=Path(data['directory']);app.preferences={};app.email='';app.skin=apply_skin(root,'极简浅色');root.geometry('1400x920+50+25');root.title('文献直达 · 功能演示');root.deiconify()
     app.open_reader(data['rid'])
     def ready():
         reader=app.reader_page
         if reader.loading or not reader.count:root.after(100,ready);return
-        if args.mode=='reader':reader.compare_attachment(data['attachment'])
+        if args.mode=='upgrade':
+            reader.dock_references();reader.context_page=0;reader.context_point=[.18,.34];reader.add_point_marker('笔记','此处留下研究想法',note_index='1.0')
+            from PIL import Image
+            reader.notes.mark_set('insert','end-1c');reader.insert_note_image(Image.open(BASE/'assets/assistant-256.png').copy());reader.notes.insert('end','\n图片、摘录与想法一起留在文献旁边。');reader.save_notes()
+        elif args.mode=='reader':reader.compare_attachment(data['attachment'])
         elif args.mode=='convert':reader.conversion();reader.conversion_window.win.geometry('760x550+370+195')
         elif args.mode=='summary':app.show_summary()
         elif args.mode=='attachments':reader.attachment_panel()

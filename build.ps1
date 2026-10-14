@@ -22,6 +22,8 @@ python tests/reader_routes_smoke.py
 if ($LASTEXITCODE -ne 0) { throw 'PDF routing tests failed' }
 python tests/attachment_reader_smoke.py
 if ($LASTEXITCODE -ne 0) { throw 'Document import, attachment comparison and conversion GUI tests failed' }
+python tests/reader_upgrade_gui_smoke.py
+if ($LASTEXITCODE -ne 0) { throw 'Reading upgrade GUI tests failed' }
 python tests/download_gui_smoke.py
 if ($LASTEXITCODE -ne 0) { throw 'Download flow tests failed' }
 python tests/exploration_gui_smoke.py

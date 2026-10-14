@@ -45,6 +45,7 @@ class GraphPage:
         combo=ttk.Combobox(highlights,textvariable=self.highlight_mode,values=list(self.highlight_modes),state='readonly',width=20);combo.pack(side='left');combo.bind('<<ComboboxSelected>>',self.change_highlight)
         ttk.Button(highlights,text='自定义颜色 / 权重',command=self.custom_highlight).pack(side='left',padx=10)
         self.show_candidates=tk.BooleanVar(value=True);ttk.Checkbutton(highlights,text='显示待探索文献（虚线）',variable=self.show_candidates,command=self.draw).pack(side='left',padx=8)
+        self.show_notes=tk.BooleanVar(value=True);ttk.Checkbutton(highlights,text='显示导出笔记',variable=self.show_notes,command=self.draw).pack(side='left',padx=4)
         explore=ttk.Frame(self.frame,padding=(24,0,24,10));explore.pack(fill='x')
         ttk.Label(explore,text='显示数量',style='Muted.TLabel').pack(side='left')
         self.limit=tk.DoubleVar(value=80);self.limit_label=tk.StringVar(value='80 篇')
@@ -56,7 +57,7 @@ class GraphPage:
         ttk.Label(side,text='研究关系',style='Card.TLabel',font=(FONT,12,'bold')).pack(anchor='w',pady=(0,12))
         self.similarity=tk.BooleanVar(value=True);self.citation=tk.BooleanVar(value=True)
         for title,var in [('内容相似',self.similarity),('文献间的引用',self.citation)]:ttk.Checkbutton(side,text=title,variable=var,command=self.draw).pack(anchor='w',pady=3)
-        ttk.Label(side,text='相似：标题、摘要、关键词\n引用：本地 PDF 参考文献 DOI',style='CardMuted.TLabel',justify='left').pack(anchor='w',pady=(12,20))
+        ttk.Label(side,text='相似：标题、摘要、关键词\n引用：参考文献 DOI\n蓝线：手动关联 · 金色方块：笔记',style='CardMuted.TLabel',justify='left').pack(anchor='w',pady=(12,20))
         self.info=tk.StringVar(value='点击节点查看详情；双击节点聚焦关联。\n\n拖动空白处平移，滚轮以鼠标为中心缩放。按住 Shift 框选区域放大。\n\n滑条控制显示数量，优先展示库内文献与连接较多的节点。')
         information=tk.Text(side,height=4,wrap='word',bg=PANEL,fg=MUTED,relief='flat',font=(FONT,10),state='disabled')
         information.pack(fill='both',expand=True)
@@ -139,7 +140,7 @@ class GraphPage:
     def filtered(self):
         if not self.data:return []
         term=self.search.get().strip().lower();project=self.project.get()
-        return [n for n in self.data['nodes'] if (self.show_candidates.get() or n.get('in_library',True)) and (project=='所有课题' or project in n['projects']) and term in (n['title']+' '+n['doi']).lower()]
+        return [n for n in self.data['nodes'] if (self.show_candidates.get() or n.get('in_library',True)) and (self.show_notes.get() or n.get('kind')!='note') and (project=='所有课题' or project in n['projects']) and term in (n['title']+' '+n['doi']).lower()]
 
     def draw(self):
         self.canvas.delete('all');width=self.canvas.winfo_width();height=self.canvas.winfo_height()
@@ -147,11 +148,11 @@ class GraphPage:
         for x in range(0,width,34):self.canvas.create_line(x,0,x,height,fill='#142941')
         for y in range(0,height,34):self.canvas.create_line(0,y,width,y,fill='#142941')
         nodes=self.filtered();ids={n['id'] for n in nodes}
-        edges=[] if not self.data else [e for e in self.data['edges'] if e['source'] in ids and e['target'] in ids and (self.similarity.get() if e['kind']=='similarity' else self.citation.get() if e['kind']=='citation' else self.show_candidates.get())]
-        for value,count in zip(self.metrics,(sum(n.get('in_library',True) for n in nodes),sum(n['pdf'] for n in nodes),sum(n['status']=='已读' for n in nodes),sum(not n.get('in_library',True) for n in nodes))):value.set(str(count))
+        edges=[] if not self.data else [e for e in self.data['edges'] if e['source'] in ids and e['target'] in ids and (self.similarity.get() if e['kind']=='similarity' else self.citation.get() if e['kind']=='citation' else self.show_candidates.get() if e['kind']=='candidate' else True)]
+        for value,count in zip(self.metrics,(sum(n.get('in_library',True) and n.get('kind')!='note' for n in nodes),sum(n['pdf'] for n in nodes),sum(n['status']=='已读' for n in nodes),sum(not n.get('in_library',True) for n in nodes))):value.set(str(count))
         if not nodes:self.canvas.create_text(width/2,height/2,text='正在生成图谱…' if self.busy else '暂无匹配文献',fill=MUTED,font=(FONT,13));return
         if self.mode=='overview':
-            nodes=[n for n in nodes if n.get('in_library',True)]
+            nodes=[n for n in nodes if n.get('in_library',True) and n.get('kind')!='note']
             projects=sorted({p for n in nodes for p in n['projects']});self.canvas.create_text(26,28,text='课题收藏分布',anchor='w',fill=FG,font=(FONT,15,'bold'))
             for i,p in enumerate(projects[:max(1,(height-85)//56)]):
                 y=82+i*56;count=sum(p in n['projects'] for n in nodes);self.canvas.create_text(26,y,text=p[:20],anchor='w',fill=FG,font=(FONT,11))
@@ -179,14 +180,15 @@ class GraphPage:
             active=self.selected in (e['source'],e['target'])
             if self.selected and not active:continue
             x1,y1=self.position(e['source']);x2,y2=self.position(e['target'])
-            self.canvas.create_line(x1,y1,x2,y2,fill=self.highlight['candidate'] if e['kind']=='candidate' else '#e5a15a' if e['kind']=='citation' else '#397589' if active else '#203e50',width=2 if active else 1,arrow='last' if e['kind']=='citation' else 'none',dash=(4,5) if e['kind']=='candidate' else ())
+            self.canvas.create_line(x1,y1,x2,y2,fill=self.highlight['candidate'] if e['kind']=='candidate' else '#e5a15a' if e['kind'] in ('citation','note') else '#71a6ef' if e['kind']=='related' else '#397589' if active else '#203e50',width=2 if active else 1,arrow='last' if e['kind']=='citation' else 'none',dash=(4,5) if e['kind']=='candidate' else ())
         maximum=max((score(n,self.highlight) for n in nodes if n.get('in_library',True)),default=1)
         label_boxes=[]
         for n in sorted(nodes,key=lambda n:n['id']!=self.selected):
             x,y=self.position(n['id']);color,r=appearance(n,self.highlight,maximum);r=9 if n['id']==self.selected else max(5,r);tags=('node',n['id'])
             if self.selected and n['id'] not in neighbors:color='#324057'
             if n['id']==self.selected:self.canvas.create_oval(x-15,y-15,x+15,y+15,outline=ACCENT,width=1)
-            self.canvas.create_oval(x-r,y-r,x+r,y+r,fill=color if n.get('in_library',True) else '#0b1627',outline='' if n.get('in_library',True) else color,width=1.5,tags=tags)
+            if n.get('kind')=='note':self.canvas.create_rectangle(x-7,y-7,x+7,y+7,fill='#e5a15a',outline='',tags=tags)
+            else:self.canvas.create_oval(x-r,y-r,x+r,y+r,fill=color if n.get('in_library',True) else '#0b1627',outline='' if n.get('in_library',True) else color,width=1.5,tags=tags)
             if len(nodes)<22 or (self.selected and n['id'] in neighbors) or (self.zoom>1.7 and len(nodes)<90):
                 label=self.canvas.create_text(x+13 if x<width-230 else x-13,y,text=n['title'][:34],anchor='w' if x<width-230 else 'e',fill=FG if n['id']==self.selected else MUTED,font=(FONT,9),tags=tags)
                 box=self.canvas.bbox(label)
@@ -208,6 +210,7 @@ class GraphPage:
             if tags and tags[0]=='node':
                 self.selected=tags[1];self.drag=tags[1];n=self.selected_node()
                 if not n.get('in_library',True):self.info.set('未入库候选 · 关系待核对\n\n'+n['title']+'\n\n'+n.get('evidence','')+'\n'+n.get('raw','')[:260])
+                elif n.get('kind')=='note':self.info.set('导出的阅读笔记\n\n'+n['title']+'\n\n对应文献：'+self.records[n['paper_id']]['title']+'\n\n'+n['path'])
                 else:
                     r=self.records[self.selected]
                     self.info.set(r['title']+'\n\n'+r['year']+' · '+r['status']+f"\n阅读 {n.get('read_count',0)} 次 · 本地被引用 {n.get('citation_count',0)} 次"+'\n\nDOI: '+(r['doi'] or '待补充')+'\n\n'+r['abstract'][:120])
@@ -243,6 +246,11 @@ class GraphPage:
         return 'break'
 
     def open_pdf(self):
+        node=self.selected_node()
+        if node and node.get('kind')=='note':
+            if getattr(self,'on_note',None):self.on_note(node['paper_id'])
+            elif getattr(self,'on_reader',None):self.on_reader(node['paper_id'])
+            return
         if not self.selected:self.info.set('先在文献关系图中选中一个节点。');return
         if self.selected not in self.records:self.info.set('这篇候选文献尚未入库。可以先查找原文，再下载归档。');return
         from library_core import readable_attachments

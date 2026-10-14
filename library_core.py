@@ -17,6 +17,7 @@ import uuid
 import urllib.parse
 import zipfile
 import xml.etree.ElementTree as ET
+from library_workflow import LibraryWorkflow
 
 FIELDS = ('title', 'authors', 'year', 'doi', 'venue', 'abstract', 'keywords', 'notes', 'status')
 DEFAULT_TEMPLATE = '{年份}_{第一作者}_{标题}'
@@ -62,13 +63,13 @@ def attachment_kind(attachment):
     if attachment.get('url') or attachment.get('kind') == 'link':
         return 'link'
     suffix = Path(attachment.get('path') or attachment.get('original') or '').suffix.lower().lstrip('.')
-    return suffix if suffix in ('pdf', 'docx', 'doc') else 'other'
+    return suffix if suffix in ('pdf', 'docx', 'doc', 'txt', 'md', 'html') else 'other'
 
 def local_attachments(record):
     return [a for a in record.get('attachments', []) if a.get('path') and attachment_kind(a) != 'link']
 
 def readable_attachments(record):
-    return [a for a in local_attachments(record) if attachment_kind(a) in ('pdf', 'docx', 'doc')]
+    return [a for a in local_attachments(record) if attachment_kind(a) in ('pdf', 'docx', 'doc', 'txt', 'md')]
 
 def has_pdf(record):
     """Whether the paper's main document is a PDF, not merely a supplement."""
@@ -79,6 +80,11 @@ def has_pdf(record):
 def document_metadata(path):
     """Read Word metadata without starting Word or extracting archive members."""
     path = Path(path)
+    if path.suffix.lower() in ('.txt','.md'):
+        from reading_documents import read_text_file
+        text=read_text_file(path)
+        from references import parse_references
+        return {'title':path.stem,'authors':'','year':'','doi':'','text':text,'references':parse_references(text)}
     if path.suffix.lower() == '.pdf':
         return pdf_metadata(path)
     if path.suffix.lower() == '.doc':
@@ -156,7 +162,7 @@ def pdf_metadata(path):
     return {'title': title, 'authors': str(meta.get('/Author') or ''), 'year': year.group() if year else '',
             'doi': normalize_doi(doi.group()) if doi else '', 'text': text,'references':parse_references(text)}
 
-class Library:
+class Library(LibraryWorkflow):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -176,6 +182,7 @@ class Library:
         ''')
         self.db.commit()
         self._migrate_attachments()
+        self.workflow_schema()
         if not self.projects():
             self.create_project('未分类')
 
@@ -411,15 +418,15 @@ class Library:
         return self._add_attachment(rid, source, '', role, extract=extract)
 
     def _add_attachment(self, rid, source, label, role, extract=False):
-        if role not in ('primary', 'supplement'):
+        if role not in ('primary', 'supplement', 'note'):
             raise ValueError('附件类型必须为正文或补充附件。')
         record = self.get(rid)
         source = Path(source).resolve()
         if not source.is_file():
             raise ValueError('附件文件不存在。')
         kind = attachment_kind({'path': str(source)})
-        if role == 'primary' and kind not in ('pdf', 'docx', 'doc'):
-            raise ValueError('仅 PDF 和 Word 文档可以设为正文。')
+        if role == 'primary' and kind not in ('pdf', 'docx', 'doc', 'txt', 'md'):
+            raise ValueError('请选择 PDF、Word 或 TXT 文档作为正文。')
         metadata = {}
         if kind == 'pdf':
             with source.open('rb') as stream:
@@ -427,7 +434,7 @@ class Library:
                     raise ValueError('文件不是有效 PDF。')
             if extract and role == 'primary':
                 metadata = pdf_metadata(source)
-        elif kind in ('docx', 'doc'):
+        elif kind in ('docx', 'doc', 'txt', 'md'):
             metadata = document_metadata(source)
         sha = digest(source)
         existing = self.db.execute('SELECT * FROM attachments WHERE paper=? AND sha=?', (rid, sha)).fetchone()
@@ -597,15 +604,10 @@ class Library:
         dois = {r['doi']: r['id'] for r in records if r['doi']}
         citations = []
         for r in records:
-            # Only DOI matches inside the extracted References section count as citations.
-            text = r.get('text', '')
-            section = re.split(r'\bReferences\b|\bBibliography\b|参考文献', text, flags=re.I)
-            if len(section) < 2:
-                continue
-            refs = section[-1].lower()
-            for doi, target in dois.items():
-                if target != r['id'] and re.search(re.escape(doi) + r'(?=$|[\s\]<>".,;)])', refs):
-                    citations.append({'source': r['id'], 'target': target, 'kind': 'citation', 'weight': 1})
+            from references import parse_references
+            for ref in r.get('references') or parse_references(r.get('text','')):
+                target=dois.get(normalize_doi(ref.get('doi','')))
+                if target and target!=r['id'] and not any(e['source']==r['id'] and e['target']==target for e in citations):citations.append({'source':r['id'],'target':target,'kind':'citation','weight':1})
         if include_candidates:
             from references import parse_references
             existing_titles={re.sub(r'\W+','',r['title']).lower() for r in records}
@@ -613,7 +615,7 @@ class Library:
             for r in records:
                 refs=r.get('references') or parse_references(r.get('text',''))
                 for ref in refs:
-                    if ref['doi'] in dois or re.sub(r'\W+','',ref['title']).lower() in existing_titles:continue
+                    if normalize_doi(ref['doi']) in dois or re.sub(r'\W+','',ref['title']).lower() in existing_titles:continue
                     cid=ref['id']
                     if cid not in candidates and len(candidates)>=400:continue
                     if cid not in candidates:
@@ -628,6 +630,14 @@ class Library:
         else:edges_list=list(edges.values())+citations
         incoming=collections.Counter(e['target'] for e in citations)
         for n in nodes:n['citation_count']=incoming[n['id']]
+        edges_list.extend(self.relation_edges({r['id'] for r in records}))
+        for r in records:
+            for a in r['attachments']:
+                if a.get('role')!='note':continue
+                nid='note-'+a['id'];nodes.append({'id':nid,'kind':'note','paper_id':r['id'],'attachment_id':a['id'],
+                    'title':a.get('label') or '阅读笔记','year':r['year'],'status':'笔记','doi':'','pdf':False,'in_library':True,
+                    'read_count':0,'citation_count':0,'projects':[self.project(p)['name'] for p in r['projects']],'path':a['path']})
+                edges_list.append({'source':r['id'],'target':nid,'kind':'note','weight':1,'label':'阅读笔记'})
         return {'nodes':nodes,'edges':edges_list,
                 'summary':{'total':len(records),'pdf':sum(any(a.get('role') == 'primary' for a in readable_attachments(r)) for r in records),
                            'read':sum(r['status']=='已读' for r in records),'citations':len(citations),

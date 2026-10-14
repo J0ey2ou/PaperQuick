@@ -11,7 +11,7 @@ using System.Threading;
 using System.Web.Script.Serialization;
 
 internal static class DocumentConverter {
-    static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 1000000 };
+    static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 24000000 };
     static Process ownedWord;
     static long ownedStart;
     static string responsePath;
@@ -64,7 +64,7 @@ internal static class DocumentConverter {
                     "platform", "Windows desktop Word", "message", wordType != null ? "本机已安装 Microsoft Word。" : "Word 导入与转 PDF 需要安装 Microsoft Word；PDF 转 Word 可直接使用。")));
                 return 0;
             }
-            Need(action == "convert", "不支持的转换操作。");
+            Need(action == "convert" || action == "read" || action == "edit", "不支持的文档操作。");
             Need(wordType != null, "Word 导入与转 PDF 需要安装 Windows 桌面版 Microsoft Word。");
             int timeoutMs = (int)Math.Max(1000, Math.Min(1800000, Convert.ToDouble(request["timeout_seconds"]) * 1000));
             using (var deadline = new Timer(Deadline, null, timeoutMs, Timeout.Infinite))
@@ -87,12 +87,13 @@ internal static class DocumentConverter {
     }
     static object ConvertFile(Type wordType, Dictionary<string, object> request) {
         string source = Path.GetFullPath(Convert.ToString(request["source"]));
-        string target = Path.GetFullPath(Convert.ToString(request["destination"]));
+        string action = Convert.ToString(request["action"]);
+        string target = action == "read" ? "" : Path.GetFullPath(Convert.ToString(request["destination"]));
         string sourceExt = Path.GetExtension(source).ToLowerInvariant(), targetExt = Path.GetExtension(target).ToLowerInvariant();
         Need(File.Exists(source), "找不到原文件，请重新选择。");
-        Need(!File.Exists(target) && !Directory.Exists(target), "保存位置已有同名文件，请换一个名称。");
+        Need(action == "read" || (!File.Exists(target) && !Directory.Exists(target)), "保存位置已有同名文件，请换一个名称。");
         Need(!String.Equals(source, target, StringComparison.OrdinalIgnoreCase), "请将转换结果保存为一个新文件。");
-        Need((sourceExt == ".doc" || sourceExt == ".docx") && targetExt == ".pdf", "这个组件用于 Word 转 PDF。请在阅读页面选择 PDF 转 Word。");
+        Need((sourceExt == ".doc" || sourceExt == ".docx") && (action == "read" || action == "edit" && targetExt == sourceExt || action == "convert" && targetExt == ".pdf"), "请选择 Word 文档与对应的保存格式。");
         var priorPids = new HashSet<int>(Process.GetProcessesByName("WINWORD").Select(p => p.Id));
         dynamic app = null, document = null, options = null, documents = null, probe = null;
         bool owns = false, isolatedEmptyInstance = false;
@@ -140,11 +141,28 @@ internal static class DocumentConverter {
             phase = "close probe";
             probe.Close(0); Release((object)probe); probe = null;
             Need((int)app.Documents.Count == 1, "Word 中出现了其他文档，本次转换已取消。");
+            if (action == "read") {
+                return Obj("text", Convert.ToString(document.Content.Text), "comments", ReadComments(document));
+            }
+            if (action == "edit") {
+                Need(Convert.ToString(document.Content.Text) == Convert.ToString(request["original_text"]), "文档已发生变化，请重新打开后编辑。");
+                var changes = ((object[])request["changes"]).Cast<Dictionary<string, object>>().OrderByDescending(x => Convert.ToInt32(x["start"]));
+                foreach (var change in changes) {
+                    int start = Convert.ToInt32(change["start"]), end = Convert.ToInt32(change["end"]);
+                    Need(start >= 0 && end >= start && end <= (int)document.Content.End, "编辑位置无效，请重新打开文档。");
+                    dynamic range = document.Range(start, end);
+                    try { range.Text = Convert.ToString(change["text"]); } finally { Release((object)range); }
+                }
+                phase = "save edited copy";
+                document.SaveAs2(FileName: target, FileFormat: sourceExt == ".docx" ? 12 : 0, AddToRecentFiles: false);
+                Need(File.Exists(target), "没有保存完整的编辑结果。");
+                return Obj("path", target);
+            }
             phase = "page count";
             pages = (int)document.ComputeStatistics(2); // wdStatisticPages
             phase = "export PDF";
             document.ExportAsFixedFormat(OutputFileName: target, ExportFormat: 17,
-                OpenAfterExport: false, OptimizeFor: 0, Range: 0, Item: 0,
+                OpenAfterExport: false, OptimizeFor: 0, Range: 0, Item: 7,
                 IncludeDocProps: true, KeepIRM: true, CreateBookmarks: 1,
                 DocStructureTags: true, BitmapMissingFonts: true, UseISO19005_1: false);
             Need(File.Exists(target) && new FileInfo(target).Length > 0, "Word 没有生成完整的转换文件，请检查原文件后重试。");
@@ -176,5 +194,16 @@ internal static class DocumentConverter {
                 try { if (!ownedWord.WaitForExit(6000)) StopOwnedWord(); } catch { }
             }
         }
+    }
+    static object ReadComments(dynamic document) {
+        var result = new List<object>(); dynamic comments = document.Comments;
+        try {
+            for (int i = 1; i <= (int)comments.Count; i++) {
+                dynamic comment = comments[i], scope = comment.Scope, range = comment.Range;
+                try { result.Add(Obj("id", "original-word-" + i, "page", Math.Max(0, (int)scope.Information[3] - 1), "text", Convert.ToString(range.Text), "quote", Convert.ToString(scope.Text), "author", Convert.ToString(comment.Author), "original", true, "kind", "原文件批注", "color", "#db9447", "created", 0, "rect", new double[] { .92, .05 + (i % 8) * .035, .95, .075 + (i % 8) * .035 })); }
+                finally { Release((object)range); Release((object)scope); Release((object)comment); }
+            }
+        } finally { Release((object)comments); }
+        return result;
     }
 }

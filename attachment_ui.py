@@ -10,13 +10,13 @@ from library_core import Library
 from pdf_reader_core import document_info, render_page
 from ui_theme import FONT, MUTED, style_dialog
 
-READABLE = {'pdf', 'doc', 'docx', 'word'}
+READABLE = {'pdf', 'doc', 'docx', 'word', 'txt', 'md'}
 
 def attachment_name(item):
     return item.get('label') or (Path(item['original']).name if item.get('original') and not item.get('url') else '') or Path(item.get('path') or '').name or item.get('url') or '附件'
 
 def readable(item):
-    return item.get('kind') in READABLE or Path(item.get('path') or '').suffix.lower() in ('.pdf', '.doc', '.docx')
+    return item.get('kind') in READABLE or Path(item.get('path') or '').suffix.lower() in ('.pdf', '.doc', '.docx', '.txt', '.md')
 
 def open_external(directory, item):
     if item.get('url'):
@@ -53,7 +53,7 @@ class AttachmentManager:
         try:self.items=lib.get(self.rid)['attachments']
         finally:lib.close()
         selected=self.tree.selection();self.tree.delete(*self.tree.get_children())
-        for item in self.items:self.tree.insert('','end',iid=item['id'],values=(attachment_name(item),'正文' if item.get('role')=='primary' else '补充材料',('网址' if item.get('url') else item.get('kind','文件').upper())))
+        for item in self.items:self.tree.insert('','end',iid=item['id'],values=(attachment_name(item),'正文' if item.get('role')=='primary' else '笔记' if item.get('role')=='note' else '补充材料',('网址' if item.get('url') else item.get('kind','文件').upper())))
         if selected and self.tree.exists(selected[0]):self.tree.selection_set(selected[0])
 
     def selected(self):
@@ -158,7 +158,7 @@ class AttachmentPreview:
         for label,command in [('上一页',lambda:self.change_page(-1)),('下一页',lambda:self.change_page(1)),('适宽',self.fit_width)]:ttk.Button(controls,text=label,width=7,command=command).pack(side='left',padx=2)
         jump=ttk.Frame(self.frame);jump.pack(fill='x',pady=6);self.page_input=tk.StringVar();entry=ttk.Entry(jump,textvariable=self.page_input,width=5);entry.pack(side='left');entry.bind('<Return>',lambda _:self.jump())
         ttk.Button(jump,text='跳页',width=5,command=self.jump).pack(side='left',padx=4);self.page_label=tk.StringVar(value='请选择附件');ttk.Label(jump,textvariable=self.page_label,style='Muted.TLabel').pack(side='left')
-        viewer=ttk.Frame(self.frame);viewer.pack(fill='both',expand=True)
+        viewer=ttk.Frame(self.frame);self.viewer=viewer;self.text_display=None;viewer.pack(fill='both',expand=True)
         self.canvas=tk.Canvas(viewer,bg='#142137',highlightthickness=0);scroll=ttk.Scrollbar(viewer,command=self.canvas.yview);horizontal=ttk.Scrollbar(viewer,orient='horizontal',command=self.canvas.xview);self.canvas.configure(yscrollcommand=scroll.set,xscrollcommand=horizontal.set)
         scroll.pack(side='right',fill='y');horizontal.pack(side='bottom',fill='x');self.canvas.pack(fill='both',expand=True);self.canvas.bind('<MouseWheel>',lambda e:self.canvas.yview_scroll(-int(e.delta/120),'units'))
         self.canvas.bind('<Button-1>',lambda e:self.canvas.scan_mark(e.x,e.y));self.canvas.bind('<B1-Motion>',lambda e:self.canvas.scan_dragto(e.x,e.y,gain=1))
@@ -181,6 +181,9 @@ class AttachmentPreview:
         if source.suffix.lower() in ('.doc','.docx') and self.on_preview_start:self.on_preview_start(preview_done)
         def work():
             try:
+                if source.suffix.lower() in ('.txt','.md'):
+                    from reading_documents import read_text_file
+                    self.events.put(('text',generation,read_text_file(source)));return
                 from document_conversion import preview_pdf
                 try:path=preview_pdf(source,self.directory/'cache'/'document-previews')
                 finally:preview_done.set()
@@ -226,6 +229,11 @@ class AttachmentPreview:
                 if generation!=self.generation:continue
                 self.loading=False
                 if kind=='error':self.status.set('附件暂时无法预览：'+value);continue
+                if kind=='text':
+                    if not self.text_display:self.text_display=tk.Text(self.viewer,wrap='word',font=(FONT,12),padx=16,pady=14)
+                    self.canvas.pack_forget();self.text_display.pack(fill='both',expand=True);self.text_display.configure(state='normal');self.text_display.delete('1.0','end');self.text_display.insert('1.0',value);self.text_display.configure(state='disabled');self.count=1;self.page=0;self.image_size=None;self.page_label.set('文本 · 连续阅读');continue
+                if self.text_display:self.text_display.pack_forget()
+                self.canvas.pack(fill='both',expand=True)
                 if kind=='open':self.path,self.count,image=value;self.page=0
                 else:self.page,image=value
                 from PIL import ImageTk

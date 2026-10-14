@@ -56,6 +56,7 @@ class App:
         self.tracking=TrackingCoordinator(root,lambda:self.library_directory)
         self.current_page = 'query'
         navigation=tk.Frame(root,bg=BG)
+        self.navigation=navigation
         navigation.pack(fill='x',padx=26,pady=(18,8))
         emblem(navigation,52).pack(side='left',padx=(0,10))
         tk.Label(navigation,text='文献直达',bg=BG,fg=FG,font=(FONT,17,'bold')).pack(side='left')
@@ -149,12 +150,14 @@ class App:
             self.library_window.on_reader=self.open_reader
             self.library_window.on_compare=self.open_attachment
             self.library_window.lookup_email=lambda:self.email
+            self.library_window.before_remove=self.before_remove_papers
         self.show_page('library')
         if paper:
             self.library_window.collect(paper)
         return self.library_window
 
     def show_page(self, key):
+        if key!='reader' and self.reader_page and self.reader_page.focus_mode:self.reader_page.toggle_focus()
         if key!=self.current_page:self.stop_reading()
         if key=='library' and not self.library_window:
             self.open_library();return
@@ -164,9 +167,12 @@ class App:
             self.graph_page.on_reader=self.open_reader
             self.graph_page.on_query=self.query_reference
             self.graph_page.on_collect=self.collect_reference
+            self.graph_page.on_note=self.open_note
         if key=='reader' and not self.reader_page:
             from reader_ui import ReaderPage
             self.reader_page=ReaderPage(self.page_host,self.library_directory,self.query_reference,self.collect_reference)
+            self.reader_page.on_open_related=self.open_reader
+            self.reader_page.on_focus_mode=self.reader_focus_mode
             self.reader_page.on_document_change=self.stop_reading
         for child in self.page_host.winfo_children():child.pack_forget()
         target=self.query_page if key=='query' else self.library_window.win if key=='library' else self.graph_page.frame if key=='graph' else self.reader_page.frame if key=='reader' else self.settings_page
@@ -215,6 +221,22 @@ class App:
         self.show_page('reader')
         try:self.reader_page.open(rid)
         except Exception as exc:messagebox.showerror('文档未打开',str(exc),parent=self.root)
+
+    def reader_focus_mode(self,focused):
+        if focused:self.navigation.pack_forget()
+        else:self.navigation.pack(fill='x',padx=26,pady=(18,8),before=self.page_host)
+
+    def open_note(self,rid):
+        self.open_reader(rid)
+        if self.reader_page:self.reader_page.show_notes();self.reader_page.notebook.select(self.reader_page.note_tab)
+
+    def before_remove_papers(self,ids):
+        if self.reader_page and self.reader_page.rid in ids:
+            if not self.reader_page.can_close():return False
+            self.stop_reading();self.reader_page.save_notes();self.reader_page.rid=None;self.reader_page.generation+=1;self.reader_page.path=None;self.reader_page.count=0;self.reader_page.image_size=None
+            self.reader_page.canvas.delete('all');self.reader_page.title.set('文献已移出，可在文献分类中恢复')
+            self.reader_page.document_canvas.reset();self.reader_page.loading=False
+        return True
 
     def open_attachment(self,rid,attachment):
         self.show_page('reader')
@@ -526,6 +548,23 @@ class App:
         ttk.Checkbutton(panel,text='登录 Windows 后启动到后台托盘',variable=startup).pack(anchor='w',pady=(18,5))
         ttk.Label(panel,text='关闭窗口保存笔记并驻留托盘；双击托盘恢复，右键“退出程序”彻底退出。',wraplength=460,style='Muted.TLabel').pack(anchor='w')
 
+        from library_core import Library
+        from reading_documents import DEFAULT_NOTE_TEMPLATE
+        library=Library(self.library_directory)
+        try:
+            marker_size=tk.StringVar(value=str(library.setting('reader_marker_size',18)))
+            note_template_value=library.setting('research_note_template',DEFAULT_NOTE_TEMPLATE)
+            continuous=tk.BooleanVar(value=library.setting('continuous_reading',True))
+        finally:library.close()
+        ttk.Separator(panel).pack(fill='x',pady=18)
+        ttk.Label(panel,text='阅读与笔记',font=(FONT,12,'bold')).pack(anchor='w')
+        ttk.Checkbutton(panel,text='连续阅读，向下滚动即可接着看下一页',variable=continuous).pack(anchor='w',pady=10)
+        row=ttk.Frame(panel);row.pack(fill='x');ttk.Label(row,text='页内笔记 / 链接标记大小（8–48）').pack(side='left');ttk.Spinbox(row,from_=8,to=48,width=7,textvariable=marker_size).pack(side='left',padx=12)
+        ttk.Label(panel,text='自定义研究笔记模板',font=(FONT,11,'bold')).pack(anchor='w',pady=(18,6))
+        template_editor=tk.Text(panel,height=9,wrap='word',font=(FONT,11),undo=True);template_editor.insert('1.0',note_template_value);template_editor.pack(fill='x')
+        def restore_template():template_editor.delete('1.0','end');template_editor.insert('1.0',DEFAULT_NOTE_TEMPLATE)
+        ttk.Button(panel,text='恢复默认模板',command=restore_template).pack(anchor='w',pady=6)
+
         def save():
             value = email.get().strip()
             if value and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
@@ -533,9 +572,20 @@ class App:
                 return
             try:
                 canonical, _, _ = parse_shortcut(shortcut.get())
+                size=int(marker_size.get());template=template_editor.get('1.0','end-1c')
+                if not 8<=size<=48:raise ValueError('标记大小应在 8–48 之间。')
+                if len(template)>12000:raise ValueError('笔记模板最多 12000 个字符。')
                 save_shortcut(app_dir(), canonical)
                 self.preferences.update(email=value,skin=skin.get());self.config_path.write_text(json.dumps(self.preferences, ensure_ascii=False, indent=2), "utf-8")
                 if startup.get()!=startup_enabled():configure_startup(startup.get(),app_dir()/'文献直达.exe')
+                library=Library(self.library_directory)
+                try:
+                    library.set_setting('reader_marker_size',size);library.set_setting('research_note_template',template);library.set_setting('continuous_reading',continuous.get())
+                finally:library.close()
+                if self.reader_page:
+                    self.reader_page.marker_size=size;self.reader_page.draw_annotations()
+                    changed=self.reader_page.continuous.get()!=continuous.get();self.reader_page.continuous.set(continuous.get())
+                    if changed and self.reader_page.path and not self.reader_page.loading:self.reader_page.render()
             except (OSError, ValueError) as exc:
                 messagebox.showerror("设置未保存", str(exc), parent=dialog)
                 return
@@ -608,6 +658,29 @@ def main():
         root.destroy()
         Path(sys.argv[2]).write_text(json.dumps({'passed':True,'checks':['Tk library UI','pypdf runtime','PDF archive','offline graph template']}), 'utf-8')
         return
+    if len(sys.argv)==3 and sys.argv[1]=='--verify-reader-upgrade-bundle':
+        import tempfile
+        from library_core import Library
+        from reader_ui import ReaderPage
+        from references import parse_references
+        from reading_documents import read_text_file
+        from PIL import Image
+        from document_conversion import converter_path
+        root.withdraw()
+        with tempfile.TemporaryDirectory(dir=app_dir()) as temp:
+            source=Path(temp)/'fixture.txt';source.write_text('Bundled text reading\nReferences\n[1] Doe J. A complete reference example. doi:10.9999/fixture',encoding='utf-8')
+            lib=Library(Path(temp)/'store');rid=lib.import_document(source);lib.close()
+            reader=ReaderPage(root,Path(temp)/'store',lambda q:None,lambda ref:None);reader.frame.pack(fill='both',expand=True);reader.open(rid)
+            deadline=time.monotonic()+15
+            while reader.loading and time.monotonic()<deadline:root.update();time.sleep(.02)
+            assert reader.text_view and 'Bundled text' in reader.text_view.get('1.0','end')
+            reader.notes.insert('end','Fixture note');reader.insert_note_image(Image.new('RGB',(80,60),'blue'));reader.save_notes();reader.dock_references();root.update_idletasks()
+            lib=Library(reader.directory);assert lib.get(rid)['note_images'];reader.workflow_export_notes(Path(temp)/'notes.html');graph=lib.graph();assert any(e['kind']=='note' for e in graph['edges'])
+            second=Path(temp)/'second.txt';second.write_text('Second fixture',encoding='utf-8');batch=lib.import_batch([second],lib.projects()[0]['id']);assert lib.undo_import(batch['batch'])['restored']==1
+            lib.remove_papers([rid]);assert lib.restore_removed()==1;lib.close()
+            assert len(parse_references('1 Doe A. Study title. J Med 2024;1:2. doi:10.9999/one\n2 Roe B. Study two. J Med 2025;2:3. doi:10.9999/two\n3 Ray C. Study three. J Med 2026;3:4. doi:10.9999/three'))==3
+            assert converter_path().is_file();reader.close()
+        root.destroy();Path(sys.argv[2]).write_text(json.dumps({'passed':True,'frozen':bool(getattr(sys,'frozen',False)),'checks':['TXT reader','embedded image notes','reference dock','export-note graph','durable import undo','removal and recovery','BMJ-style references','Word helper bundled']},ensure_ascii=False,indent=2),'utf-8');return
     if len(sys.argv) == 3 and sys.argv[1] == '--verify-reader-bundle':
         import tempfile
         from pypdf import PdfWriter

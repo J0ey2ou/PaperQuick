@@ -46,7 +46,7 @@ class LibraryWindow:
             tk.Label(card,text=hint,bg=PANEL,fg='#647e9b',font=('Segoe UI',8),anchor='w').pack(fill='x',padx=18,pady=(0,12))
         toolbar=ttk.Frame(self.win,padding=(24,10,24,14));toolbar.pack(fill='x')
         self.controls=[]
-        for title,command in [('导入 PDF / Word',self.import_pdfs),('导入文件夹',self.import_folder),('新增条目',self.new_record),('命名规则',self.naming),('离线图谱',self.graph),('EndNote 同步',self.endnote),('Word 引用',self.word)]:
+        for title,command in [('导入文档',self.import_pdfs),('导入文件夹',self.import_folder),('撤回导入',self.undo_import),('新增条目',self.new_record),('命名规则',self.naming),('离线图谱',self.graph),('EndNote 同步',self.endnote),('Word 引用',self.word)]:
             button=ttk.Button(toolbar,text=title,command=command,style='Accent.TButton' if title.startswith('导入 PDF') else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
         footer=ttk.Frame(self.win);footer.pack(side='bottom',fill='x')
         body=ttk.Panedwindow(self.win,orient='horizontal');body.pack(fill='both',expand=True,padx=24)
@@ -78,9 +78,10 @@ class LibraryWindow:
         self.context_menu.add_separator();self.context_menu.add_command(label='插入 Word 引用 / 参考文献',command=self.word)
         self.context_menu.add_command(label='附件管理 / 比对阅读',command=self.attachments)
         self.context_menu.add_command(label='Word / PDF 互转',command=self.convert_document)
+        self.context_menu.add_separator();self.context_menu.add_command(label='删除文献',command=self.delete_selected);self.context_menu.add_command(label='恢复最近删除',command=self.restore_deleted)
         self.tree.bind('<Control-a>',lambda _:self.select_all(False))
         selection_bar=ttk.Frame(footer,padding=(24,8,24,0));selection_bar.pack(fill='x')
-        for title,command in [('选择所有文献',lambda:self.select_all(False)),('选择所有已下载',lambda:self.select_all(True)),('按规则重新命名',self.rename_selected)]:
+        for title,command in [('选择所有文献',lambda:self.select_all(False)),('选择所有已下载',lambda:self.select_all(True)),('按规则重新命名',self.rename_selected),('删除文献',self.delete_selected),('恢复最近删除',self.restore_deleted)]:
             b=ttk.Button(selection_bar,text=title,command=command);b.pack(side='left',padx=(0,8));self.controls.append(b)
         actions=ttk.Frame(footer,padding=(24,8,24,8));actions.pack(fill='x')
         for title,command in [('下载原文',self.download_selected),('阅读正文',self.open_pdf),('附件 / 比对',self.attachments),('编辑信息',self.edit),('分配课题',self.assign),('标记已读',lambda:self.mark('已读')),('标记未读',lambda:self.mark('未读'))]:
@@ -215,24 +216,44 @@ class LibraryWindow:
     def new_project(self):self.choose_project(lambda pid:None,'新建课题')
 
     def import_pdfs(self):
-        paths=filedialog.askopenfilenames(parent=self.win,title='导入 PDF / Word（保留原文件）',filetypes=[('PDF / Word','*.pdf *.docx *.doc'),('PDF','*.pdf'),('Word','*.docx *.doc')])
+        paths=filedialog.askopenfilenames(parent=self.win,title='导入文档（保留原文件）',filetypes=[('文献文档','*.pdf *.docx *.doc *.txt *.md'),('PDF','*.pdf'),('Word','*.docx *.doc'),('文本','*.txt *.md')])
         if paths:self.choose_project(lambda pid:self.batch_import(paths,pid))
 
     def import_folder(self):
-        folder=filedialog.askdirectory(parent=self.win,title='导入文件夹中的 PDF / Word（包含子目录）')
+        if self.busy:return
+        folder=filedialog.askdirectory(parent=self.win,title='选择文献文件夹（包含子目录）')
         if folder:
-            paths=[p for p in Path(folder).rglob('*') if p.is_file() and p.suffix.lower() in ('.pdf','.docx','.doc') and not p.name.startswith('~$')]
-            if not paths:messagebox.showinfo('没有可导入文档','该文件夹中没有 PDF 或 Word 文档。',parent=self.win);return
-            self.choose_project(lambda pid:self.batch_import(paths,pid))
+            self.run('正在查找文件',lambda lib:sorted((p for p in Path(folder).rglob('*') if p.is_file() and p.suffix.lower() in ('.pdf','.docx','.doc','.txt','.md') and not p.name.startswith('~$')),key=lambda p:str(p).casefold()),self.choose_import_files)
+
+    def choose_import_files(self,paths):
+        if not paths:messagebox.showinfo('没有可导入文档','文件夹中没有 PDF、Word 或 TXT 文档。',parent=self.win);return
+        from import_selection_ui import ImportSelection
+        self.import_selection=ImportSelection(self.win,paths,lambda selected:self.choose_project(lambda pid:self.batch_import(selected,pid)))
 
     def batch_import(self,paths,pid):
-        def work(lib):
-            count=0;errors=[]
-            for path in paths:
-                try:lib.import_document(path,pid);count+=1
-                except Exception as exc:errors.append(f'{Path(path).name}: {exc}')
-            return f'已导入 / 关联 {count} 份文档。'+ ('\n失败：\n'+'\n'.join(errors[:10]) if errors else '')
-        self.run('正在整理文献',work,lambda result:messagebox.showinfo('导入完成',result,parent=self.win))
+        def done(result):
+            self.status.set(f"已导入 / 关联 {result['count']} 份文档。可点击“撤回导入”撤销这一批。")
+            if result['errors']:messagebox.showwarning('部分文件未导入','\n'.join(result['errors'][:12]),parent=self.win)
+        self.run('正在整理文献',lambda lib:lib.import_batch(paths,pid),done)
+
+    def undo_import(self):
+        if self.busy:return
+        row=self.library.latest_import()
+        if not row:self.status.set('没有可以撤回的导入记录。');return
+        if not messagebox.askyesno('撤回最近一次导入','撤回最近一批导入？原文件会保留；导入后已经编辑、阅读或新增笔记的文献也会保留。',parent=self.win):return
+        self.run('正在撤回导入',lambda lib:lib.undo_import(row['id']),lambda r:self.status.set(f"已撤回 {r['restored']} 项；保留导入后有变化的 {r['kept']} 篇文献。"))
+
+    def delete_selected(self):
+        if self.busy:return
+        ids=self.selected()
+        if not ids:return
+        if not messagebox.askyesno('删除文献',f'将选中的 {len(ids)} 篇文献移出文献库？可通过“恢复最近删除”找回。导入前的原文件不会删除。',parent=self.win):return
+        if getattr(self,'before_remove',None) and self.before_remove(ids) is False:return
+        self.run('正在移出文献库',lambda lib:lib.remove_papers(ids),lambda n:self.status.set(f'已移出 {n} 篇文献，可以恢复。'))
+
+    def restore_deleted(self):
+        if self.busy:return
+        self.run('正在恢复文献',lambda lib:lib.restore_removed(),lambda n:self.status.set(f'已恢复 {n} 篇文献。'))
 
     def show_context_menu(self,event):
         rid=self.tree.identify_row(event.y)

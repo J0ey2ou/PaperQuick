@@ -41,13 +41,15 @@ class ThemeTests(unittest.TestCase):
                 dialog = tk.Toplevel(root)
                 dialog.withdraw()
                 theme.style_dialog(dialog)
-                for name in ('极简浅色', '极光紫', '石墨灰', '深空蓝'):
+                for name in (*theme.SKINS, '深空蓝'):
                     theme.apply_skin(root, name)
                     self.assertEqual(card.cget('background'), theme.PANEL)
                     self.assertEqual(text.cget('background'), theme.INPUT)
                     self.assertEqual(dialog.cget('background'), theme.BG)
                     self.assertEqual(text.get('1.0', 'end-1c'), '保留阅读笔记')
                     self.assertEqual(str(tree.tag_configure('odd', 'background')), theme.SURFACE)
+                    self.assertEqual(root.attributes('-alpha'), 1.0)
+                    self.assertEqual(dialog.attributes('-alpha'), 1.0)
                 root.update_idletasks()
                 pending = root.tk.call('after', 'info')
                 for _ in range(5):
@@ -103,6 +105,39 @@ class ThemeTests(unittest.TestCase):
                 layout = ttk.Style(root).layout('TNotebook.Tab')
                 self.assertEqual(layout[0][0], 'Button.border')
             finally:
+                root.destroy()
+
+    def test_glass_windows_and_startup_remain_fully_opaque(self):
+        from unittest.mock import Mock
+        root = tk.Tk()
+        root.withdraw()
+        with patch('ui_theme.window_chrome'):
+            try:
+                theme.apply_skin(root, '琉璃·冰川蓝')
+                dialog = tk.Toplevel(root)
+                dialog.withdraw()
+                theme.style_dialog(dialog)
+                self.assertEqual(dialog.attributes('-alpha'), 1.0)
+                # Startup must never fade through to another application.
+                animated = Mock()
+                animated.winfo_exists.return_value = True
+                callbacks = []
+                animated.after.side_effect = lambda delay, callback: callbacks.append(callback)
+                theme.opening_animation(animated)
+                theme.apply_skin(root, '琉璃·深海青')
+                while callbacks:
+                    callbacks.pop(0)()
+                self.assertEqual(animated.attributes.call_args.args, ('-alpha', 1.0))
+                self.assertEqual(animated.attributes.call_count, 1)
+                animated.after.assert_not_called()
+                # Switching away from a previously translucent window restores opacity.
+                root.attributes('-alpha', .78)
+                theme.apply_skin(root, '极简浅色')
+                self.assertEqual(root.attributes('-alpha'), 1.0)
+                self.assertEqual(dialog.attributes('-alpha'), 1.0)
+                self.assertEqual(theme.skin_opacity('unknown'), 1.0)
+            finally:
+                theme.apply_skin(root, '深空蓝')
                 root.destroy()
 
 

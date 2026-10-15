@@ -1,10 +1,10 @@
 # 文献直达 · PaperQuick
 
-**v3.3.0 阅读与整理升级**：勾选文件夹导入与撤回、可恢复删除、连续阅读与文字选择、图片 / 截图笔记、阅读区 Word / TXT 编辑、页内文献链接、可嵌入参考文献、BMJ 参考文献提取修复，以及图谱中的笔记关联。操作步骤见 [v3.3 阅读升级指南](docs/v3.3-reading.md)，本版分享文案见 [微信更新介绍](docs/微信更新文案-v3.3.md)。
+**v3.4.0 单行阅读工具与自动保存**：主阅读区、附件比对和笔记工具统一为单行图标，悬停查看说明；设置自动保存，新增版本与开发者项目入口。提供继承此前功能的完整包，升级时保留文献库和个人设置。见 [v3.4 升级说明](docs/v3.4-upgrade.md)。
 
 从导师发来的一个标题，到课题文件夹里的一篇论文，再到阅读笔记和写作引用。Windows 本地文献工作区，连接 **查询 → 下载归档 → 分类与附件 → 阅读比对 → 关系探索 → 阅读回顾 → Word 写作**。
 
-[下载 v3.3 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.3.0/PaperQuick-v3.3-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.3.0) · [v3.3 使用指南](docs/v3.3-reading.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [微信更新介绍](docs/微信更新文案-v3.3.md)
+[下载 v3.4 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.4.0/PaperQuick-v3.4-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.4.0) · [v3.4 升级指南](docs/v3.4-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
 
 **v3.2 新增**：Word 导入与分页预览、Word / PDF 互转、文献附件关联与并排比对、31 套 Word 引用格式，以及主题关键词、检索式、引用与被引探索和新文献追踪。
 
@@ -14,7 +14,7 @@
 
 ## 安装与升级
 
-1. 在 Releases 下载 `PaperQuick-v3.3-Windows.zip`，解压完整文件夹到可写目录。
+1. 在 Releases 下载 `PaperQuick-v3.4-Windows.zip`，解压完整文件夹到可写目录。
 2. 双击 `文献直达.exe`，保留同目录的 `全局选词助手.exe`、`browser-extension` 和说明文件。
 3. 复制一个英文标题或 DOI，在 **文献查询 → 粘贴并查找** 试用。
 4. 升级时先从托盘 **退出文献直达**，备份原文件夹，再覆盖程序文件。保留 `本地文献库`、`settings.json`、`shortcut.json`，不要用空库替换旧库。备份请在退出后复制完整 `本地文献库`，其中包含文献信息、正文、附件、笔记和阅读记录。
@@ -34,8 +34,8 @@
 1. 查询结果点击 **收藏 / 下载归档**，选择或新建课题。可下载的直接 PDF 自动归档；需要网页操作时打开对应全文 / 出版社页面。
 2. **文献分类 → 导入文件** 支持 PDF、DOCX、DOC、TXT、Markdown；**导入文件夹** 扫描子目录后先勾选文件再导入，支持撤回最近一批导入。还可手工新增条目和编辑信息、删除与恢复文献。右键 **下载原文（打开下载页面）** 跳转对应页面；**下载并自动归档** 查找开放版本并保存。
 3. 浏览器完成机构登录并下载的 PDF，通过 **关联已下载 PDF** 或 **导入 PDF / Word** 归档。当前不监控浏览器下载目录，不会猜测新下载文件属于哪篇文献。
-4. **命名规则** 支持 `{年份}`、`{第一作者}`、`{标题}`、`{DOI}`、`{课题}`，例如 `{年份}_{第一作者}_{标题}`。英文占位符也可用：`{year}_{author}_{title}`。
-5. 选中文献后右键 **按规则重新命名**。可使用 **选择所有文献 / 选择所有已下载文献**（全库范围，会清除筛选），或 Ctrl / Shift 多选。确认预览后批量应用各条目主课题的规则。文件保留 PDF、Word 或其他真实扩展名；补充材料带独立名称和后缀，网址附件不参与重命名。没有本地文件的条目跳过，同名文件自动加后缀；原始导入文件不改动。
+4. **命名规则** 用于生成软件中的显示名称，支持 `{年份}`、`{第一作者}`、`{标题}`、`{期刊}`、`{DOI}`、`{课题}`；默认使用完整论文标题。显示名称保留正常标点，不附加 PDF / Word 扩展名。
+5. 选中文献后右键 **识别 / 修改显示名称**。软件先读取文件，再逐篇核对或编辑显示名称。也可按规则批量生成预览。没有附件或识别失败时仍可手动改名。此操作不会重命名原始文件或已归档附件。
 
 “已归档正文”统计 PDF 或 Word 主文件，只有补充材料或网址的文献仍可继续查找正文。重新导入相同文件会复用记录；归档副本丢失时会恢复附件，保留其名称、关联笔记和批注。原位置存在不同内容时另存一份，避免覆盖。
 
@@ -94,7 +94,18 @@ Word 阅读显示分页预览；点击 **编辑原文** 可在阅读框中修改
 
 ## 设置、皮肤和后台运行
 
-右上角 **设置** 是独立页面，支持 **深空蓝 / 极光紫 / 石墨灰 / 极简浅色**，切换立即预览，保存后下次沿用。可设置快捷键、可选 Unpaywall 联系邮箱、**登录 Windows 后后台启动**。
+**文献图谱 → 文献关系** 支持选择 **框选 / 圈选**，拖出区域选中至少两篇库内文献后填写关联原因。区域及成员在本机保存，重新打开仍可查看；通过 **管理命名区域** 修改名称或删除区域，删除区域不会删除文献。图谱与文献分类页均有 **添加关系** 入口，可选择两篇文献并填写原因；图谱以连线及文字显示。
+
+
+在 **文献分类 → 识别 / 修改显示名称** 中，先读取正文中的标题和作者，再展示可编辑预览。PDF 识别结合首页字号、换行标题和署名，过滤更新提示、下载水印及补充材料标题。识别不准时可以直接修改后保存，也可主动点击 **通过 DOI 联网补全**，只发送填写的 DOI 给 Crossref。默认只更新显示名称；仅在勾选 **同时保存论文信息** 后更新正式标题、作者、期刊、年份和 DOI。取消不作更改，原始文件、归档附件、笔记和批注保留。
+
+阅读页添加的 PDF、Word、TXT 等可阅读附件会在 **文献图谱 → 文献关系** 中自动与所属文献连线。如果附件已是库中另一篇文献的正文，会直接连接两篇文献。双击节点或右键选择 **在阅读页打开文献 / 附件** 即可打开。
+
+附件比对窗格默认启用 **连续阅读**，滚动即可阅读下一页；也可取消勾选恢复分页。支持跳页、缩放和适宽，附件阅读位置独立于正文。Word 附件沿用本机 Word 预览转换，转换后同样支持连续阅读。
+
+**文献阅读 → 最近阅读** 可展开最近读过的 50 篇文献，按最后打开时间倒序显示，单击标题继续阅读。记录保存在本机，重启后仍可查看；再次阅读同一篇会更新顺序，不重复列出。
+
+右上角 **设置** 是独立页面，支持 **深空蓝 / 极光紫 / 石墨灰 / 极简浅色**，以及六套彩色琉璃皮肤：**冰川蓝 / 翡翠绿 / 蔷薇粉 / 鸢尾紫 / 琥珀金 / 深海青**。琉璃主题以清透配色和明亮表面呈现质感，所有主题的窗口与对话框均完全不透明，不会露出后方页面，文字和图片保持清晰。切换立即生效并自动保存，下次打开继续使用。设置底部显示版本号和开发者项目入口。可设置快捷键、可选 Unpaywall 联系邮箱、**登录 Windows 后后台启动**。
 
 关闭主窗口收起到系统托盘，双击托盘恢复；右键托盘可打开文献库、设置或完整退出。重复启动唤起同一窗口。启用 Windows 登录启动后先驻留后台，可在设置取消。没有账号登录体系或鼠标跟随浮窗。
 
@@ -124,6 +135,8 @@ citeproc-js implements the Citation Style Language · © Frank Bennett. [Citatio
 
 ## English
 
+**v3.4.0:** single-row icon tools in the reader, comparison and notes; hover descriptions and overflow menus retain every action. Settings save automatically across restarts. About includes the version and developer project. This is a complete upgrade: keep your existing library and settings. See the [upgrade guide](docs/v3.4-upgrade.md#english).
+
 **v3.3.0 reading update:** selective folder import and undo, recoverable deletion, continuous reading, PDF text selection, image notes, in-reader Word / TXT editing, position links, docked references, BMJ bibliography fixes and note nodes in the graph. See the [v3.3 guide](docs/v3.3-reading.md#english).
 
 **PaperQuick** is a local Windows literature workspace: search, archive documents by research project, keep supplements beside papers, read and compare, explore relationships, review your reading, and insert Word citations. The Windows package needs no Python installation or account. Local organization, reading, conversion, graphs and recaps use no external AI or AI API key. Search and download require internet access.
@@ -132,7 +145,7 @@ citeproc-js implements the Citation Style Language · © Frank Bennett. [Citatio
 
 ### Install and update
 
-Download [PaperQuick-v3.3-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.3.0/PaperQuick-v3.3-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Exit from the tray before updating, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
+Download [PaperQuick-v3.4-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.4.0/PaperQuick-v3.4-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Exit from the tray before updating, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
 
 **Installed Microsoft Word for Windows is required for Word pagination, Word-to-PDF conversion and citation insertion.** PDF-to-Word conversion, PDF reading and DOCX import/storage do not require Word. WPS and Word Online are not supported substitutes for the features that require Word.
 
@@ -146,7 +159,7 @@ Download [PaperQuick-v3.3-Windows.zip](https://github.com/J0ey2ou/PaperQuick/rel
 6. **References**: open the detachable panel. Original numbers are retained where recognized; `1*` indicates extraction order only. Verify before searching, collecting or downloading. Scans and complex layouts may need manual correction; OCR is not included.
 7. **Graph**: node-count slider, wheel zoom, blank-area pan, Shift box zoom, double-click neighborhood focus and reset. Candidates come from local references. Highlight by reading count, local citation count or PDF availability, with configurable colors/weights. Local citation counts are not global metrics.
 8. **Reading recap**: the title-bar `阅读总结` button opens a four-tab window without replacing your current page. Time counts only while the loaded reading page is in front of you; other apps, pages, the recap and a hidden window pause it. This is time spent on the page, not proof of attention or understanding. Time before recording began cannot be recovered. Recaps show your currently saved abstracts, notes and excerpts.
-9. **Settings**: Space Blue, Aurora Purple, Graphite and Light themes preview immediately; save to persist. Configure shortcuts, optional Unpaywall email and Windows sign-in background startup. Close hides to tray; double-click restores; tray Exit fully quits. No mouse-following overlay or local account system.
+9. **Settings**: Space Blue, Aurora Purple, Graphite and Light themes apply and save automatically. About shows the version and project link. Configure shortcuts, optional Unpaywall email and Windows sign-in background startup. Close hides to tray; double-click restores; tray Exit fully quits. No mouse-following overlay or local account system.
 
 ### Attachments, comparison and Word/PDF conversion
 

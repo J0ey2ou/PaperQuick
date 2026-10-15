@@ -21,7 +21,12 @@ from library_workflow import LibraryWorkflow
 
 FIELDS = ('title', 'authors', 'year', 'doi', 'venue', 'abstract', 'keywords', 'notes', 'status')
 DEFAULT_TEMPLATE = '{年份}_{第一作者}_{标题}'
-TOKENS = {'年份', '第一作者', '标题', 'DOI', '课题', 'year', 'author', 'title', 'doi', 'project'}
+
+
+def display_name(record):
+    return str(record.get('display_name') or record.get('title') or '未命名文献')
+
+TOKENS = {'年份', '第一作者', '标题', 'DOI', '课题', '期刊', 'year', 'author', 'title', 'doi', 'project', 'journal', 'venue'}
 STOPWORDS = set('the and for with from this that into are was were study using analysis results of in to a an on by is as or at be we our based'.split())
 
 def clean_name(value, limit=100):
@@ -40,7 +45,7 @@ def validate_template(template):
         raise ValueError('命名模板的大括号不匹配。') from exc
     fields = [name for _, name, _, _ in parts if name is not None]
     if not fields or any(name not in TOKENS or spec or conversion for _, name, spec, conversion in parts if name is not None):
-        raise ValueError('使用 {年份}、{第一作者}、{标题}、{DOI}、{课题}，不支持格式代码。')
+        raise ValueError('使用 {年份}、{第一作者}、{标题}、{期刊}、{DOI}、{课题}，不支持格式代码。')
     return template
 
 def filename(record, project, template=DEFAULT_TEMPLATE, title_length=80):
@@ -48,7 +53,9 @@ def filename(record, project, template=DEFAULT_TEMPLATE, title_length=80):
     author = re.split(r'\n|;|；| 等| et al', record.get('authors', ''))[0].strip() or '未知作者'
     values = {'年份': record.get('year') or '未知年份', '第一作者': author,
               '标题': (record.get('title') or '未命名')[:title_length], 'DOI': record.get('doi') or '无DOI', '课题': project}
+    values['期刊'] = record.get('venue') or '未知期刊'
     values.update(dict(zip(('year', 'author', 'title', 'doi', 'project'), (values[k] for k in ('年份', '第一作者', '标题', 'DOI', '课题')))))
+    values.update(journal=values['期刊'], venue=values['期刊'])
     return clean_name(template.format(**values), 150) + '.pdf'
 
 def digest(path):
@@ -246,6 +253,15 @@ class Library(LibraryWorkflow):
             query += ' JOIN memberships m ON m.paper=p.id WHERE m.project=?'
             args = (project,)
         return [self._record(row) for row in self.db.execute(query + ' ORDER BY p.updated DESC', args)]
+
+    def recent_read(self, limit=50):
+        """Unique papers in last-opened order, without loading document bodies."""
+        return [dict(row) for row in self.db.execute('''
+            SELECT id, COALESCE(NULLIF(json_extract(data, '$.display_name'), ''), json_extract(data, '$.title')) AS title,
+                   CAST(json_extract(data, '$.last_read') AS REAL) AS last_read
+            FROM papers WHERE CAST(json_extract(data, '$.last_read') AS REAL)>0
+            ORDER BY last_read DESC, id LIMIT ?
+        ''', (max(0, int(limit)),))]
 
     def _record(self, row):
         data = json.loads(row['data'])
@@ -521,22 +537,27 @@ class Library(LibraryWorkflow):
                 metadata.pop('text', None)
                 metadata.pop('references', None)
 
-    def rename(self, rid):
+    def rename(self, rid, destinations=None):
         record = self.get(rid)
         changed = []
         for attachment in local_attachments(record):
+            if destinations is not None and attachment['id'] not in destinations:
+                continue
             old = self.root / attachment['path']
             if not old.is_file():
                 with self.db:
                     self.log('rename-missing-attachment', {'paper': rid, 'attachment': attachment['id'], 'path': str(old)})
                 continue
-            base = self.target(record, attachment)
+            base = (self._managed_path(destinations[attachment['id']]) if destinations is not None
+                    else self.target(record, attachment))
             base.parent.mkdir(parents=True, exist_ok=True)
             new = base
             index = 2
             while ((new.exists() and new.resolve() != old.resolve()) or
                    self.db.execute('SELECT id FROM attachments WHERE path=? COLLATE NOCASE AND id<>?',
                                    (str(new.relative_to(self.root)), attachment['id'])).fetchone()):
+                if destinations is not None:
+                    raise ValueError('预览中的目标文件名已被占用，请重新预览。')
                 new = base.with_stem(base.stem + f' ({index})')
                 index += 1
             if new.resolve() == old.resolve():
@@ -566,7 +587,7 @@ class Library(LibraryWorkflow):
 
     def graph(self, project=None, include_candidates=True):
         records = self.records(project)
-        nodes = [{'id': r['id'], 'title': r['title'], 'year': r['year'], 'status': r['status'],
+        nodes = [{'id': r['id'], 'title': display_name(r), 'article_title': r['title'], 'year': r['year'], 'status': r['status'],
                   'doi': r['doi'], 'pdf': any(a.get('role') == 'primary' for a in readable_attachments(r)), 'in_library':True,'read_count':r.get('read_count',0),
                   'projects': [self.project(p)['name'] for p in r['projects']]} for r in records]
         texts, df = {}, collections.Counter()
@@ -638,7 +659,35 @@ class Library(LibraryWorkflow):
                     'title':a.get('label') or '阅读笔记','year':r['year'],'status':'笔记','doi':'','pdf':False,'in_library':True,
                     'read_count':0,'citation_count':0,'projects':[self.project(p)['name'] for p in r['projects']],'path':a['path']})
                 edges_list.append({'source':r['id'],'target':nid,'kind':'note','weight':1,'label':'阅读笔记'})
-        return {'nodes':nodes,'edges':edges_list,
+        # Supplements are visible documents, connected to their owning paper.
+        # If the identical file is already another paper's primary, connect those
+        # paper nodes instead of producing a duplicate document node.
+        primaries = collections.defaultdict(list)
+        for r in records:
+            for a in readable_attachments(r):
+                if a.get('role') == 'primary' and a.get('sha'):
+                    primaries[a['sha']].append(r['id'])
+        attachment_pairs = set()
+        for r in records:
+            for a in readable_attachments(r):
+                if a.get('role') in ('primary', 'note'):
+                    continue
+                targets = [rid for rid in primaries.get(a.get('sha'), []) if rid != r['id']]
+                if not targets:
+                    nid = 'attachment-' + a['id']
+                    nodes.append({'id': nid, 'kind': 'attachment', 'paper_id': r['id'], 'attachment_id': a['id'],
+                        'title': a.get('label') or Path(a.get('original') or a['path']).stem,
+                        'year': '', 'status': '附件', 'doi': '', 'pdf': attachment_kind(a) == 'pdf',
+                        'in_library': True, 'read_count': 0, 'citation_count': 0,
+                        'projects': [self.project(p)['name'] for p in r['projects']], 'path': a['path']})
+                    targets = [nid]
+                for target in targets:
+                    pair = tuple(sorted((r['id'], target)))
+                    if pair not in attachment_pairs:
+                        attachment_pairs.add(pair)
+                        edges_list.append({'source': r['id'], 'target': target, 'kind': 'attachment',
+                                           'weight': 1, 'label': '附件关联'})
+        return {'nodes':nodes,'edges':edges_list,'groups':self.graph_groups({r['id'] for r in records}),
                 'summary':{'total':len(records),'pdf':sum(any(a.get('role') == 'primary' for a in readable_attachments(r)) for r in records),
                            'read':sum(r['status']=='已读' for r in records),'citations':len(citations),
                            'candidates':sum(not n['in_library'] for n in nodes)}}

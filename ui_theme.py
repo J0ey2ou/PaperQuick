@@ -17,7 +17,20 @@ SKINS = {
     '极简浅色': dict(BASE, BG='#f4f6fa', PANEL='#ffffff', SURFACE='#e9eef6',
                    INPUT='#fcfdff', FG='#233249', MUTED='#58697f',
                    ACCENT='#245faa', LINE='#cbd5e3'),
+    '琉璃·冰川蓝': dict(BASE, BG='#e5f2fc', PANEL='#f3faff', SURFACE='#d3e7f7',
+                      INPUT='#f8fcff', FG='#172e46', MUTED='#405b73', ACCENT='#205b94', LINE='#9abdd8'),
+    '琉璃·翡翠绿': dict(BASE, BG='#e5f5ee', PANEL='#f2fcf7', SURFACE='#cfe9dd',
+                      INPUT='#f7fdf9', FG='#173c30', MUTED='#3f6355', ACCENT='#226546', LINE='#95c8b1'),
+    '琉璃·蔷薇粉': dict(BASE, BG='#f9eaf1', PANEL='#fff5fa', SURFACE='#efd5e2',
+                      INPUT='#fff9fc', FG='#46283b', MUTED='#725164', ACCENT='#8e3f65', LINE='#d4a6bd'),
+    '琉璃·鸢尾紫': dict(BASE, BG='#eeeafa', PANEL='#f9f6ff', SURFACE='#dfd7f0',
+                      INPUT='#fcfaff', FG='#35294e', MUTED='#615578', ACCENT='#674494', LINE='#b9aad4'),
+    '琉璃·琥珀金': dict(BASE, BG='#faf0de', PANEL='#fff9ed', SURFACE='#ecddbd',
+                      INPUT='#fffdf7', FG='#45351c', MUTED='#6c5939', ACCENT='#80561a', LINE='#ccb58b'),
+    '琉璃·深海青': dict(BASE, BG='#102c36', PANEL='#193b46', SURFACE='#234d59',
+                      INPUT='#102f3a', FG='#eefcff', MUTED='#b1d1da', ACCENT='#9ce4ea', LINE='#50808c'),
 }
+GLASS_SKINS = tuple(name for name in SKINS if name.startswith('琉璃·'))
 CURRENT_SKIN = '深空蓝'
 globals().update(BASE)
 _LEGACY = dict(zip(_CORE, ('#080f1c', '#101c2e', '#15243a', '#0b1627',
@@ -178,6 +191,11 @@ def install_theme(root):
     style.map('Subtle.TButton', background=[('pressed', SURFACE), ('active', PANEL)],
               foreground=[('disabled', tokens['disabled']), ('active', FG), ('!disabled', MUTED)])
     style.configure('Compact.TButton', padding=(10, 6), font=(FONT, 9))
+    style.configure('Icon.TButton',padding=3,width=0,background=BG,borderwidth=0)
+    style.map('Icon.TButton',background=[('pressed',tokens['pressed']),('active',tokens['hover'])])
+    style.configure('SelectedIcon.TButton',padding=3,width=0,background=tokens['selection'],borderwidth=0)
+    style.map('SelectedIcon.TButton',background=[('pressed',tokens['pressed']),('active',tokens['hover']),('!disabled',tokens['selection'])])
+    style.configure('Toolbar.TEntry',padding=3)
     style.configure('TEntry', fieldbackground=INPUT, foreground=FG, insertcolor=ACCENT,
                     selectbackground=tokens['selection'], selectforeground=FG, padding=9, borderwidth=1)
     style.map('TEntry', bordercolor=[('focus', ACCENT)],
@@ -277,6 +295,7 @@ def _queue_window_chrome(window):
 
 def _style_window_tree(widget):
     if isinstance(widget, (tk.Tk, tk.Toplevel)):
+        _apply_opacity(widget)
         signature = (BG, FG)
         if getattr(widget, '_paperquick_chrome_palette', None) != signature:
             widget._paperquick_chrome_palette = signature
@@ -318,37 +337,24 @@ def window_icon(window):
 
 def style_dialog(window):
     window.configure(bg=BG)
+    _apply_opacity(window)
     window_icon(window)
     window._paperquick_chrome_palette = (BG, FG)
     _queue_window_chrome(window)
 
 
-def opening_animation(window):
-    """A short one-shot fade; respect the Windows client-animation preference."""
-    import os
-    enabled = True
-    if os.name == 'nt':
-        try:
-            import ctypes
-            value = ctypes.c_int(1)
-            ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(value), 0)
-            enabled = bool(value.value)
-        except (AttributeError, OSError):
-            pass
-    if not enabled:
-        return
+def skin_opacity(name=None):
+    """Glass is a palette treatment; all windows remain fully opaque."""
+    return 1.0
+
+
+def _apply_opacity(window):
     try:
-        window.attributes('-alpha', .15)
+        window.attributes('-alpha', skin_opacity())
     except tk.TclError:
-        return
-    def step(index=0):
-        if not window.winfo_exists():
-            return
-        progress = min(1, index/14)
-        try:
-            window.attributes('-alpha', .15+.85*(1-(1-progress)**3))
-        except tk.TclError:
-            return
-        if progress < 1:
-            window.after(18, lambda: step(index+1))
-    window.after(20, step)
+        pass
+
+
+def opening_animation(window):
+    """Keep the startup hook without exposing underlying windows during a fade."""
+    _apply_opacity(window)

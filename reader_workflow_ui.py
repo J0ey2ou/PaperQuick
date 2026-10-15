@@ -229,6 +229,7 @@ class ReaderWorkflow:
             try:lib.relate(self.rid,target);title=lib.get(target)['title']
             finally:lib.close()
             self.add_point_marker('关联文献',title,target=target);dialog.destroy();self.status.set('已关联；双击页内标记即可打开，图谱中也会显示。')
+            if getattr(self,'on_library_changed',None):self.on_library_changed()
         ttk.Button(panel,text='关联并留下页内标记',style='Accent.TButton',command=save).pack(anchor='e',pady=12)
 
     def add_hyperlink(self):
@@ -252,6 +253,7 @@ class ReaderWorkflow:
                 self.add_point_marker('链接',label.get().strip() or Path(value).name or value,**fields)
             except Exception as exc:messagebox.showerror('链接未添加',str(exc),parent=dialog);return
             dialog.destroy();self.status.set('已在右键位置留下链接标记；双击标记即可打开。')
+            if getattr(self,'on_library_changed',None):self.on_library_changed()
         ttk.Button(panel,text='添加链接',style='Accent.TButton',command=save).pack(anchor='e',pady=(16,0))
 
     def dock_references(self):

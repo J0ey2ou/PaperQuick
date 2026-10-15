@@ -4,7 +4,7 @@ import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk,messagebox,colorchooser
+from tkinter import ttk,messagebox,colorchooser,simpledialog
 from library_core import Library
 from graph_view import write_graph
 from ui_theme import BG,PANEL,SURFACE,FG,MUTED,ACCENT,LINE,FONT,style_dialog
@@ -52,13 +52,20 @@ class GraphPage:
         self.limit_slider=ttk.Scale(explore,from_=1,to=800,variable=self.limit,command=self.schedule_draw);self.limit_slider.pack(side='left',fill='x',expand=True,padx=12)
         ttk.Label(explore,textvariable=self.limit_label,width=20).pack(side='left')
         for label,command in [('聚焦关联',self.focus_selected),('返回全图',self.reset),('适应窗口',self.fit_view)]:ttk.Button(explore,text=label,command=command).pack(side='left',padx=4)
+        selection_tools=ttk.Frame(self.frame,padding=(24,0,24,10));selection_tools.pack(fill='x')
+        self.area_mode=tk.StringVar(value='移动');self.selection_ids=set()
+        for label in ('移动','框选','圈选'):
+            ttk.Radiobutton(selection_tools,text=label,variable=self.area_mode,value=label,command=lambda:self.switch('network')).pack(side='left',padx=(0,10))
+        ttk.Button(selection_tools,text='命名选区 / 关联原因',command=self.name_selection).pack(side='left',padx=6)
+        ttk.Button(selection_tools,text='管理命名区域',command=self.manage_groups).pack(side='left',padx=6)
+        ttk.Button(selection_tools,text='添加两篇文献的关系',command=self.add_relationship).pack(side='left',padx=6)
         content=ttk.Frame(self.frame,padding=(24,0));content.pack(fill='both',expand=True)
         side=ttk.Frame(content,style='Card.TFrame',padding=18,width=290);side.pack(side='right',fill='y',padx=(14,0));side.pack_propagate(False)
         ttk.Label(side,text='研究关系',style='Card.TLabel',font=(FONT,12,'bold')).pack(anchor='w',pady=(0,12))
         self.similarity=tk.BooleanVar(value=True);self.citation=tk.BooleanVar(value=True)
         for title,var in [('内容相似',self.similarity),('文献间的引用',self.citation)]:ttk.Checkbutton(side,text=title,variable=var,command=self.draw).pack(anchor='w',pady=3)
-        ttk.Label(side,text='相似：标题、摘要、关键词\n引用：参考文献 DOI\n蓝线：手动关联 · 金色方块：笔记',style='CardMuted.TLabel',justify='left').pack(anchor='w',pady=(12,20))
-        self.info=tk.StringVar(value='点击节点查看详情；双击节点聚焦关联。\n\n拖动空白处平移，滚轮以鼠标为中心缩放。按住 Shift 框选区域放大。\n\n滑条控制显示数量，优先展示库内文献与连接较多的节点。')
+        ttk.Label(side,text='相似：标题、摘要、关键词\n引用：参考文献 DOI\n蓝线：手动关联 · 紫线：附件关联\n金色方块：笔记 · 紫色方块：附件',style='CardMuted.TLabel',justify='left').pack(anchor='w',pady=(12,20))
+        self.info=tk.StringVar(value='点击节点查看详情；双击或右键打开文献 / 附件。\n\n“聚焦关联”可查看选中文献的连接。拖动空白处平移，滚轮缩放，Shift 框选区域放大。')
         information=tk.Text(side,height=4,wrap='word',bg=PANEL,fg=MUTED,relief='flat',font=(FONT,10),state='disabled')
         information.pack(fill='both',expand=True)
         def update_info(*_):
@@ -72,12 +79,13 @@ class GraphPage:
         self.canvas.pack(side='left',fill='both',expand=True)
         self.canvas.bind('<Configure>',lambda _:self.draw());self.canvas.bind('<Button-1>',self.select);self.canvas.bind('<B1-Motion>',self.move);self.canvas.bind('<ButtonRelease-1>',self.release);self.canvas.bind('<MouseWheel>',self.wheel)
         self.canvas.bind('<Double-1>',self.double_click)
+        self.canvas.bind('<Button-3>',self.context_menu)
         self.status=tk.StringVar(value='完全离线 · 不调用 AI / API · 引用覆盖可能不完整')
         ttk.Label(self.frame,textvariable=self.status,style='Muted.TLabel',padding=(24,12)).pack(fill='x')
         self.positions={};self.frame.after(100,self.poll)
 
     def refresh(self):
-        if self.busy:return
+        if self.busy:self._refresh_pending=True;return
         self.busy=True;self.status.set('正在本地生成图谱…')
         def job():
             lib=None
@@ -105,6 +113,8 @@ class GraphPage:
                 self.project_combo.configure(values=['所有课题']+sorted({p for n in data['nodes'] for p in n['projects']}))
                 self.status.set('完全离线 · 青色为内容相似，橙色箭头为本地引用证据 · PDF 提取范围有限，关系需核对')
                 self.draw()
+            if getattr(self,'_refresh_pending',False):
+                self._refresh_pending=False;self.refresh()
         except queue.Empty:pass
         if self.frame.winfo_exists():self.frame.after(1000 if self.frame.winfo_toplevel().state()=='withdrawn' and not self.busy and not self.layout_running else 120,self.poll)
 
@@ -113,7 +123,7 @@ class GraphPage:
         for key,button in self.buttons.items():button.configure(style='Accent.TButton' if mode==key else 'TButton')
         self.draw()
 
-    def reset(self):self.focus=None;self.selected=None;self.layout_key=None;self.positions={};self.pan=[0.,0.];self.zoom=1;self.draw()
+    def reset(self):self.focus=None;self.selected=None;self.selection_ids=set();self.layout_key=None;self.positions={};self.pan=[0.,0.];self.zoom=1;self.draw()
 
     def schedule_draw(self,_=None):
         self.limit_label.set(f'{int(self.limit.get())} 篇')
@@ -140,19 +150,18 @@ class GraphPage:
     def filtered(self):
         if not self.data:return []
         term=self.search.get().strip().lower();project=self.project.get()
-        return [n for n in self.data['nodes'] if (self.show_candidates.get() or n.get('in_library',True)) and (self.show_notes.get() or n.get('kind')!='note') and (project=='所有课题' or project in n['projects']) and term in (n['title']+' '+n['doi']).lower()]
+        return [n for n in self.data['nodes'] if (self.show_candidates.get() or n.get('in_library',True)) and (self.show_notes.get() or n.get('kind')!='note') and (project=='所有课题' or project in n['projects']) and term in (n['title']+' '+n.get('article_title','')+' '+n['doi']).lower()]
 
     def draw(self):
         self.canvas.delete('all');width=self.canvas.winfo_width();height=self.canvas.winfo_height()
         if width<50 or height<50:return
-        for x in range(0,width,34):self.canvas.create_line(x,0,x,height,fill='#142941')
-        for y in range(0,height,34):self.canvas.create_line(0,y,width,y,fill='#142941')
         nodes=self.filtered();ids={n['id'] for n in nodes}
         edges=[] if not self.data else [e for e in self.data['edges'] if e['source'] in ids and e['target'] in ids and (self.similarity.get() if e['kind']=='similarity' else self.citation.get() if e['kind']=='citation' else self.show_candidates.get() if e['kind']=='candidate' else True)]
-        for value,count in zip(self.metrics,(sum(n.get('in_library',True) and n.get('kind')!='note' for n in nodes),sum(n['pdf'] for n in nodes),sum(n['status']=='已读' for n in nodes),sum(not n.get('in_library',True) for n in nodes))):value.set(str(count))
+        papers=[n for n in nodes if n.get('kind') not in ('note','attachment')]
+        for value,count in zip(self.metrics,(sum(n.get('in_library',True) for n in papers),sum(n['pdf'] for n in papers),sum(n['status']=='已读' for n in papers),sum(not n.get('in_library',True) for n in papers))):value.set(str(count))
         if not nodes:self.canvas.create_text(width/2,height/2,text='正在生成图谱…' if self.busy else '暂无匹配文献',fill=MUTED,font=(FONT,13));return
         if self.mode=='overview':
-            nodes=[n for n in nodes if n.get('in_library',True) and n.get('kind')!='note']
+            nodes=[n for n in nodes if n.get('in_library',True) and n.get('kind') not in ('note','attachment')]
             projects=sorted({p for n in nodes for p in n['projects']});self.canvas.create_text(26,28,text='课题收藏分布',anchor='w',fill=FG,font=(FONT,15,'bold'))
             for i,p in enumerate(projects[:max(1,(height-85)//56)]):
                 y=82+i*56;count=sum(p in n['projects'] for n in nodes);self.canvas.create_text(26,y,text=p[:20],anchor='w',fill=FG,font=(FONT,11))
@@ -176,18 +185,29 @@ class GraphPage:
         neighbors={self.selected}
         for e in edges:
             if self.selected in (e['source'],e['target']):neighbors.update((e['source'],e['target']))
+        for group in self.data.get('groups',[]):
+            points=[self.position(rid) for rid in group['members'] if rid in ids]
+            if not points:continue
+            xs,ys=zip(*points);bounds=(min(xs)-24,min(ys)-24,max(xs)+24,max(ys)+24)
+            create=self.canvas.create_oval if group['shape']=='ellipse' else self.canvas.create_rectangle
+            create(*bounds,outline='#a896df',width=2,dash=(6,4),tags=('group',group['id']))
+            self.canvas.create_text(bounds[0]+6,bounds[1]-9,text=group['label'][:65],anchor='w',fill=ACCENT,font=(FONT,10,'bold'),tags=('group',group['id']))
         for e in edges:
             active=self.selected in (e['source'],e['target'])
             if self.selected and not active:continue
             x1,y1=self.position(e['source']);x2,y2=self.position(e['target'])
-            self.canvas.create_line(x1,y1,x2,y2,fill=self.highlight['candidate'] if e['kind']=='candidate' else '#e5a15a' if e['kind'] in ('citation','note') else '#71a6ef' if e['kind']=='related' else '#397589' if active else '#203e50',width=2 if active else 1,arrow='last' if e['kind']=='citation' else 'none',dash=(4,5) if e['kind']=='candidate' else ())
+            self.canvas.create_line(x1,y1,x2,y2,fill=self.highlight['candidate'] if e['kind']=='candidate' else '#b49ae5' if e['kind']=='attachment' else '#e5a15a' if e['kind'] in ('citation','note') else '#71a6ef' if e['kind']=='related' else '#397589' if active else '#203e50',width=2 if active else 1,arrow='last' if e['kind']=='citation' else 'none',dash=(4,5) if e['kind']=='candidate' else ())
+            if e['kind']=='related' and (active or len(edges)<25):
+                self.canvas.create_text((x1+x2)/2,(y1+y2)/2-10,text=e.get('label','相关文献')[:28],fill=ACCENT,font=(FONT,9))
         maximum=max((score(n,self.highlight) for n in nodes if n.get('in_library',True)),default=1)
         label_boxes=[]
         for n in sorted(nodes,key=lambda n:n['id']!=self.selected):
             x,y=self.position(n['id']);color,r=appearance(n,self.highlight,maximum);r=9 if n['id']==self.selected else max(5,r);tags=('node',n['id'])
             if self.selected and n['id'] not in neighbors:color='#324057'
             if n['id']==self.selected:self.canvas.create_oval(x-15,y-15,x+15,y+15,outline=ACCENT,width=1)
+            if n['id'] in getattr(self,'selection_ids',set()):self.canvas.create_oval(x-12,y-12,x+12,y+12,outline='#b49ae5',width=3)
             if n.get('kind')=='note':self.canvas.create_rectangle(x-7,y-7,x+7,y+7,fill='#e5a15a',outline='',tags=tags)
+            elif n.get('kind')=='attachment':self.canvas.create_rectangle(x-7,y-7,x+7,y+7,fill='#b49ae5',outline='',tags=tags)
             else:self.canvas.create_oval(x-r,y-r,x+r,y+r,fill=color if n.get('in_library',True) else '#0b1627',outline='' if n.get('in_library',True) else color,width=1.5,tags=tags)
             if len(nodes)<22 or (self.selected and n['id'] in neighbors) or (self.zoom>1.7 and len(nodes)<90):
                 label=self.canvas.create_text(x+13 if x<width-230 else x-13,y,text=n['title'][:34],anchor='w' if x<width-230 else 'e',fill=FG if n['id']==self.selected else MUTED,font=(FONT,9),tags=tags)
@@ -203,6 +223,9 @@ class GraphPage:
                 if tags and tags[0]=='project':self.project.set(tags[1]);self.switch('network');return
             return
         self.drag_start=(event.x,event.y);self.pan_start=list(self.pan)
+        mode=self.area_mode.get() if hasattr(self,'area_mode') else '移动'
+        if mode in ('框选','圈选'):
+            self.drag='select-ellipse' if mode=='圈选' else 'select-rectangle';return
         if event.state & 1:self.drag='region';return
         items=self.canvas.find_overlapping(event.x-8,event.y-8,event.x+8,event.y+8)
         for item in reversed(items):
@@ -211,14 +234,22 @@ class GraphPage:
                 self.selected=tags[1];self.drag=tags[1];n=self.selected_node()
                 if not n.get('in_library',True):self.info.set('未入库候选 · 关系待核对\n\n'+n['title']+'\n\n'+n.get('evidence','')+'\n'+n.get('raw','')[:260])
                 elif n.get('kind')=='note':self.info.set('导出的阅读笔记\n\n'+n['title']+'\n\n对应文献：'+self.records[n['paper_id']]['title']+'\n\n'+n['path'])
+                elif n.get('kind')=='attachment':self.info.set('关联附件\n\n'+n['title']+'\n\n所属文献：'+self.records[n['paper_id']]['title']+'\n\n双击或右键可在阅读页打开。')
                 else:
                     r=self.records[self.selected]
-                    self.info.set(r['title']+'\n\n'+r['year']+' · '+r['status']+f"\n阅读 {n.get('read_count',0)} 次 · 本地被引用 {n.get('citation_count',0)} 次"+'\n\nDOI: '+(r['doi'] or '待补充')+'\n\n'+r['abstract'][:120])
+                    self.info.set(n['title']+'\n\n'+r['year']+' · '+r['status']+f"\n阅读 {n.get('read_count',0)} 次 · 本地被引用 {n.get('citation_count',0)} 次"+'\n\nDOI: '+(r['doi'] or '待补充')+'\n\n'+r['abstract'][:120])
+                reasons=[e.get('label','相关文献') for e in self.data.get('edges',[]) if e['kind']=='related' and self.selected in (e['source'],e['target'])]
+                regions=[g['label'] for g in self.data.get('groups',[]) if self.selected in g['members']]
+                if reasons or regions:self.info.set(self.info.get()+'\n\n关联原因：\n'+'\n'.join(dict.fromkeys(reasons+regions)))
                 self.draw();return
         self.selected=None;self.drag='pan';self.draw()
 
     def move(self,event):
         if not self.drag:return
+        if self.drag in ('select-rectangle','select-ellipse'):
+            self.canvas.delete('selection-region')
+            create=self.canvas.create_oval if self.drag=='select-ellipse' else self.canvas.create_rectangle
+            create(*self.drag_start,event.x,event.y,outline=ACCENT,width=2,dash=(5,3),tags='selection-region');return
         if self.drag=='region':
             self.canvas.delete('region');self.canvas.create_rectangle(*self.drag_start,event.x,event.y,outline=ACCENT,dash=(5,3),width=2,tags='region');return
         if self.drag=='pan':self.pan=[self.pan_start[0]+event.x-self.drag_start[0],self.pan_start[1]+event.y-self.drag_start[1]]
@@ -226,6 +257,16 @@ class GraphPage:
         self.draw()
 
     def release(self,event):
+        if self.drag in ('select-rectangle','select-ellipse'):
+            from graph_selection import region_members
+            shape='ellipse' if self.drag=='select-ellipse' else 'rectangle'
+            visible={n['id'] for n in getattr(self,'visible_nodes',[]) if n['id'] in self.records}
+            points={rid:self.position(rid) for rid in visible if rid in self.positions}
+            self.selection_ids=set(region_members(points,self.drag_start,(event.x,event.y),shape))
+            self.selection_shape=shape;self.drag=None;self.selected=None;self.draw()
+            self.status.set(f'已选中 {len(self.selection_ids)} 篇文献，可命名关联原因或添加两篇文献的关系。')
+            if len(self.selection_ids)>=2:self.name_selection()
+            return
         if self.drag=='region':
             x,y=self.drag_start;w=abs(event.x-x);h=abs(event.y-y)
             if min(w,h)>15:
@@ -234,8 +275,82 @@ class GraphPage:
         self.drag=None;self.draw()
 
     def double_click(self,event):
-        if self.selected:self.focus_selected()
+        node=self.node_at(event)
+        if node:
+            self.selected=node;self.drag=None;self.open_pdf()
         else:self.zoom_at(event.x,event.y,1.8)
+
+    def name_selection(self):
+        ids=list(getattr(self,'selection_ids',set()))
+        if len(ids)<2:self.status.set('请先使用“框选”或“圈选”选中至少两篇已入库文献。');return
+        label=simpledialog.askstring('命名选区',f'为所选 {len(ids)} 篇文献填写关联原因：',parent=self.frame)
+        if label is None:return
+        lib=Library(self.directory)
+        try:lib.create_graph_group(ids,label,getattr(self,'selection_shape','rectangle'))
+        except ValueError as exc:messagebox.showerror('选区未保存',str(exc),parent=self.frame);return
+        finally:lib.close()
+        self.selection_ids=set();self.area_mode.set('移动');self.refresh()
+
+    def add_relationship(self):
+        from relations_ui import relationship_editor
+        ids=sorted(getattr(self,'selection_ids',set()))
+        if not ids and self.selected in self.records:ids=[self.selected]
+        relationship_editor(self.frame,self.directory,ids[:2],self.refresh)
+
+    def manage_groups(self,selected=None):
+        lib=Library(self.directory)
+        try:groups=lib.graph_groups()
+        finally:lib.close()
+        dialog=tk.Toplevel(self.frame);style_dialog(dialog);dialog.title('管理命名区域')
+        panel=ttk.Frame(dialog,padding=18);panel.pack(fill='both',expand=True)
+        tree=ttk.Treeview(panel,columns=('reason','count'),show='headings',height=9)
+        tree.heading('reason',text='关联原因 / 区域名称');tree.column('reason',width=490)
+        tree.heading('count',text='文献数');tree.column('count',width=70);tree.pack(fill='both',expand=True)
+        for group in groups:tree.insert('','end',iid=group['id'],values=(group['label'],len(group['members'])))
+        if selected and tree.exists(selected):tree.selection_set(selected)
+        reason=tk.StringVar();ttk.Entry(panel,textvariable=reason,width=75).pack(fill='x',pady=10)
+        def choose(_=None):
+            chosen=tree.selection()
+            if chosen:reason.set(tree.item(chosen[0],'values')[0])
+        tree.bind('<<TreeviewSelect>>',choose);choose()
+        def change(remove=False):
+            chosen=tree.selection()
+            if not chosen:return
+            lib=Library(self.directory)
+            try:
+                if remove:lib.remove_graph_group(chosen[0])
+                else:lib.rename_graph_group(chosen[0],reason.get())
+            except ValueError as exc:messagebox.showerror('区域未更新',str(exc),parent=dialog);return
+            finally:lib.close()
+            dialog.destroy();self.refresh()
+        buttons=ttk.Frame(panel);buttons.pack(fill='x')
+        ttk.Button(buttons,text='删除区域（保留文献）',command=lambda:change(True)).pack(side='left')
+        ttk.Button(buttons,text='保存名称',command=change).pack(side='right')
+
+    def node_at(self,event):
+        for item in reversed(self.canvas.find_overlapping(event.x-6,event.y-6,event.x+6,event.y+6)):
+            tags=self.canvas.gettags(item)
+            if len(tags)>1 and tags[0]=='node':return tags[1]
+        return None
+
+    def context_menu(self,event):
+        node=self.node_at(event)
+        if not node:
+            for item in reversed(self.canvas.find_overlapping(event.x-3,event.y-3,event.x+3,event.y+3)):
+                tags=self.canvas.gettags(item)
+                if len(tags)>1 and tags[0]=='group':self.manage_groups(tags[1]);return
+            return
+        self.selected=node;self.drag=None;self.draw()
+        previous=getattr(self,'_context_menu',None)
+        if previous:previous.destroy()
+        menu=tk.Menu(self.frame,tearoff=False)
+        self._context_menu=menu
+        menu.add_command(label='在阅读页打开文献 / 附件',command=self.open_pdf)
+        menu.add_command(label='聚焦关联',command=self.focus_selected)
+        menu.add_command(label='查找原文',command=self.query_selected)
+        menu.add_command(label='添加文献关系',command=self.add_relationship)
+        try:menu.tk_popup(event.x_root,event.y_root)
+        finally:menu.grab_release()
 
     def zoom_at(self,x,y,factor):
         wx,wy=self.world(x,y);self.zoom=max(.08,min(8,self.zoom*factor))
@@ -247,6 +362,18 @@ class GraphPage:
 
     def open_pdf(self):
         node=self.selected_node()
+        if node and node.get('kind')=='attachment':
+            lib=Library(self.directory)
+            try:
+                record=lib.get(node['paper_id'])
+                attachment=next((a for a in record['attachments'] if a['id']==node['attachment_id']),None)
+                if not attachment or not (lib.root/attachment['path']).is_file():
+                    self.info.set('附件已移除或文件不存在，请刷新图谱后重新关联。');return
+                if getattr(self,'on_attachment',None):self.on_attachment(node['paper_id'],attachment)
+                else:self.info.set('请在主窗口的图谱中打开附件。')
+            except ValueError as exc:self.info.set(str(exc))
+            finally:lib.close()
+            return
         if node and node.get('kind')=='note':
             if getattr(self,'on_note',None):self.on_note(node['paper_id'])
             elif getattr(self,'on_reader',None):self.on_reader(node['paper_id'])

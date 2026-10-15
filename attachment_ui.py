@@ -151,18 +151,27 @@ class AttachmentPreview:
         self.directory=Path(directory);self.frame=ttk.Frame(parent,style='Card.TFrame',padding=8)
         self.on_preview_start=on_preview_start
         self.events=queue.Queue();self.closed=False;self.generation=0;self.loading=False;self.path=None;self.page=0;self.count=0;self.scale=1.;self.items=[];self.fit_pending=False
+        self.continuous=tk.BooleanVar(master=parent,value=True)
         header=ttk.Frame(self.frame);header.pack(fill='x')
-        ttk.Label(header,text='附件比对',font=(FONT,12,'bold')).pack(side='left');ttk.Button(header,text='收起',width=5,command=on_close).pack(side='right')
+        ttk.Label(header,text='附件比对',font=(FONT,12,'bold')).pack(side='left')
         self.choice=tk.StringVar();self.combo=ttk.Combobox(self.frame,textvariable=self.choice,state='readonly',width=24);self.combo.pack(fill='x',pady=8);self.combo.bind('<<ComboboxSelected>>',self.choose)
-        controls=ttk.Frame(self.frame);controls.pack(fill='x')
-        for label,command in [('上一页',lambda:self.change_page(-1)),('下一页',lambda:self.change_page(1)),('适宽',self.fit_width)]:ttk.Button(controls,text=label,width=7,command=command).pack(side='left',padx=2)
-        jump=ttk.Frame(self.frame);jump.pack(fill='x',pady=6);self.page_input=tk.StringVar();entry=ttk.Entry(jump,textvariable=self.page_input,width=5);entry.pack(side='left');entry.bind('<Return>',lambda _:self.jump())
-        ttk.Button(jump,text='跳页',width=5,command=self.jump).pack(side='left',padx=4);self.page_label=tk.StringVar(value='请选择附件');ttk.Label(jump,textvariable=self.page_label,style='Muted.TLabel').pack(side='left')
+        from icon_toolbar import IconToolbar
+        self.page_input=tk.StringVar();self.page_label=tk.StringVar(value='请选择附件')
+        controls=IconToolbar(self.frame);self.toolbar=controls;controls.pack(fill='x',pady=(0,5))
+        for icon,label,command in [('previous','上一页',lambda:self.change_page(-1)),('next','下一页',lambda:self.change_page(1)),('fit','适合宽度',self.fit_width),('minus','缩小',lambda:self.zoom(.85)),('plus','放大',lambda:self.zoom(1.18))]:
+            controls.add(icon,label,command)
+        controls.add('continuous','连续阅读 / 单页阅读',self.toggle_continuous,variable=self.continuous)
+        controls.add('close','收起附件比对',on_close)
+        controls.add_page(self.page_input,self.jump,self.page_label)
         viewer=ttk.Frame(self.frame);self.viewer=viewer;self.text_display=None;viewer.pack(fill='both',expand=True)
         self.canvas=tk.Canvas(viewer,bg='#142137',highlightthickness=0);scroll=ttk.Scrollbar(viewer,command=self.canvas.yview);horizontal=ttk.Scrollbar(viewer,orient='horizontal',command=self.canvas.xview);self.canvas.configure(yscrollcommand=scroll.set,xscrollcommand=horizontal.set)
+        self.vertical_scroll=scroll
+        from reader_canvas import DocumentCanvas
+        self.document_canvas=DocumentCanvas(self)
+        self.canvas.configure(yscrollcommand=self.document_canvas.scrolled)
         scroll.pack(side='right',fill='y');horizontal.pack(side='bottom',fill='x');self.canvas.pack(fill='both',expand=True);self.canvas.bind('<MouseWheel>',lambda e:self.canvas.yview_scroll(-int(e.delta/120),'units'))
         self.canvas.bind('<Button-1>',lambda e:self.canvas.scan_mark(e.x,e.y));self.canvas.bind('<B1-Motion>',lambda e:self.canvas.scan_dragto(e.x,e.y,gain=1))
-        self.status=tk.StringVar(value='附件单独翻页，不影响正文和笔记。');ttk.Label(self.frame,textvariable=self.status,style='Muted.TLabel',wraplength=360).pack(fill='x',pady=6)
+        self.status=tk.StringVar(value='附件独立连续阅读，不影响正文和笔记。');ttk.Label(self.frame,textvariable=self.status,style='Muted.TLabel',wraplength=360).pack(fill='x',pady=6)
         self.frame.after(100,self.poll)
 
     def set_items(self,items,selected=None):
@@ -176,6 +185,7 @@ class AttachmentPreview:
 
     def open(self,item):
         self.generation+=1;generation=self.generation;source=self.directory/item['path'];self.attachment_id=item['id'];self.rid=item.get('paper');self.path=None;self.page=0;self.count=0;self.loading=True;self.fit_pending=True;self.image_size=None
+        self.document_canvas.reset()
         self.status.set('正在准备附件预览…');self.canvas.delete('all');self.page_label.set('正在打开…')
         preview_done=threading.Event()
         if source.suffix.lower() in ('.doc','.docx') and self.on_preview_start:self.on_preview_start(preview_done)
@@ -187,13 +197,26 @@ class AttachmentPreview:
                 from document_conversion import preview_pdf
                 try:path=preview_pdf(source,self.directory/'cache'/'document-previews')
                 finally:preview_done.set()
-                count=document_info(path);image=render_page(path,0,self.scale);self.events.put(('open',generation,(path,count,image)))
+                from pdf_reader_core import render_page_data,page_sizes
+                count=document_info(path);image,chars=render_page_data(path,0,self.scale);self.events.put(('open',generation,(path,count,image,chars,page_sizes(path))))
             except Exception as exc:preview_done.set();self.events.put(('error',generation,str(exc)))
         threading.Thread(target=work,daemon=True).start()
 
     def change_page(self,delta):
         if self.loading or not self.path or not 0<=self.page+delta<self.count:return
+        if self.continuous.get() and self.document_canvas.goto(self.page+delta):return
         self.page+=delta;self.render()
+
+    def draw_annotations(self):
+        # The shared virtual canvas keeps this pane independent of main-paper notes.
+        pass
+
+    def toggle_continuous(self):
+        if self.path and not self.loading:self.render()
+
+    def zoom(self,factor):
+        if self.path and not self.loading:
+            self.scale=max(.2,min(3,self.scale*factor));self.render()
 
     def render(self):
         if self.loading or not self.path:return
@@ -206,7 +229,10 @@ class AttachmentPreview:
             finally:lib.close()
         self.loading=True;generation=self.generation;page=self.page;scale=self.scale;path=self.path
         def work():
-            try:self.events.put(('page',generation,(page,render_page(path,page,scale))))
+            try:
+                from pdf_reader_core import render_page_data,page_sizes
+                image,chars=render_page_data(path,page,scale)
+                self.events.put(('page',generation,(page,image,chars,page_sizes(path),scale)))
             except Exception as exc:self.events.put(('error',generation,str(exc)))
         threading.Thread(target=work,daemon=True).start()
 
@@ -227,20 +253,33 @@ class AttachmentPreview:
             while True:
                 kind,generation,value=self.events.get_nowait()
                 if generation!=self.generation:continue
+                if kind=='canvas-page':
+                    sign,page,data,error=value
+                    if sign!=self.document_canvas.sign:continue
+                    if error:
+                        self.document_canvas.pending.discard(page);self.status.set('附件页面暂时无法加载：'+error)
+                    else:self.document_canvas.receive(page,*data)
+                    continue
                 self.loading=False
                 if kind=='error':self.status.set('附件暂时无法预览：'+value);continue
                 if kind=='text':
                     if not self.text_display:self.text_display=tk.Text(self.viewer,wrap='word',font=(FONT,12),padx=16,pady=14)
+                    self.text_display.configure(yscrollcommand=self.vertical_scroll.set);self.vertical_scroll.configure(command=self.text_display.yview)
                     self.canvas.pack_forget();self.text_display.pack(fill='both',expand=True);self.text_display.configure(state='normal');self.text_display.delete('1.0','end');self.text_display.insert('1.0',value);self.text_display.configure(state='disabled');self.count=1;self.page=0;self.image_size=None;self.page_label.set('文本 · 连续阅读');continue
                 if self.text_display:self.text_display.pack_forget()
+                self.vertical_scroll.configure(command=self.canvas.yview)
                 self.canvas.pack(fill='both',expand=True)
-                if kind=='open':self.path,self.count,image=value;self.page=0
-                else:self.page,image=value
-                from PIL import ImageTk
-                self.photo=ImageTk.PhotoImage(image,master=self.frame);self.image_size=(image.width,image.height);self.canvas.delete('all');self.canvas.create_image(10,10,image=self.photo,anchor='nw');self.canvas.configure(scrollregion=(0,0,image.width+20,image.height+20));self.canvas.yview_moveto(0);self.canvas.xview_moveto(0)
-                self.page_input.set(str(self.page+1));self.page_label.set(f'/ {self.count} 页');self.status.set('独立翻页 · 可拖动中间分隔线调整宽度')
+                if kind=='open':self.path,self.count,image,chars,sizes=value;self.page=0
+                else:
+                    page,image,chars,sizes,scale=value
+                    if scale!=self.scale:continue
+                    self.page=page
+                self.image_size=(image.width,image.height)
+                self.document_canvas.adopt(self.path,self.page,self.count,image,chars,sizes)
+                self.page_input.set(str(self.page+1));self.page_label.set(f'第 {self.page+1} / {self.count} 页'+(' · 连续阅读' if self.continuous.get() else ''))
+                self.status.set('向下滚动接着阅读下一页 · 附件与正文独立' if self.continuous.get() else '独立分页阅读 · 可切换连续阅读')
                 if self.fit_pending:self.fit_pending=False;self.fit_width()
         except queue.Empty:pass
         self.frame.after(100,self.poll)
 
-    def close(self):self.closed=True;self.generation+=1;self.frame.destroy()
+    def close(self):self.closed=True;self.generation+=1;self.document_canvas.reset();self.frame.destroy()

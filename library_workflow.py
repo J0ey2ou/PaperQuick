@@ -12,6 +12,8 @@ class LibraryWorkflow:
         CREATE TABLE IF NOT EXISTS import_batches(id TEXT PRIMARY KEY,at REAL,project TEXT,state TEXT,data TEXT);
         CREATE TABLE IF NOT EXISTS paper_trash(id TEXT PRIMARY KEY,at REAL,state TEXT,data TEXT);
         CREATE TABLE IF NOT EXISTS paper_relations(id TEXT PRIMARY KEY,source TEXT,target TEXT,label TEXT,created REAL,UNIQUE(source,target,label));
+        CREATE TABLE IF NOT EXISTS graph_groups(id TEXT PRIMARY KEY,label TEXT NOT NULL,shape TEXT NOT NULL,created REAL);
+        CREATE TABLE IF NOT EXISTS graph_group_members(group_id TEXT,paper TEXT,PRIMARY KEY(group_id,paper));
         ''')
         self.db.commit()
 
@@ -158,12 +160,46 @@ class LibraryWorkflow:
     def relate(self, source, target, label='相关文献'):
         self.get(source);self.get(target)
         if source==target:raise ValueError('请选择另一篇文献。')
+        label=str(label).strip()
+        if not label or len(label)>160:raise ValueError('请填写 1–160 字的关联原因。')
         with self.db:
-            self.db.execute('INSERT OR IGNORE INTO paper_relations VALUES(?,?,?,?,?)',(uuid.uuid4().hex,source,target,str(label)[:160],time.time()))
+            existing=self.db.execute('SELECT id FROM paper_relations WHERE ((source=? AND target=?) OR (source=? AND target=?)) AND label=?',(source,target,target,source,label)).fetchone()
+            if not existing:self.db.execute('INSERT INTO paper_relations VALUES(?,?,?,?,?)',(uuid.uuid4().hex,source,target,label,time.time()))
         return target
 
     def relation_edges(self, ids):
         return [{'source':r['source'],'target':r['target'],'kind':'related','weight':1,'label':r['label']} for r in self.db.execute('SELECT * FROM paper_relations') if r['source'] in ids and r['target'] in ids]
+
+    def create_graph_group(self, papers, label, shape='rectangle'):
+        papers=list(dict.fromkeys(papers));label=str(label).strip()
+        if len(papers)<2:raise ValueError('请至少选中两篇已入库文献。')
+        if not label or len(label)>160:raise ValueError('请填写 1–160 字的关联原因。')
+        if shape not in ('rectangle','ellipse'):raise ValueError('请选择框选或圈选。')
+        for rid in papers:self.get(rid)
+        gid=uuid.uuid4().hex
+        with self.db:
+            self.db.execute('INSERT INTO graph_groups VALUES(?,?,?,?)',(gid,label,shape,time.time()))
+            self.db.executemany('INSERT INTO graph_group_members VALUES(?,?)',[(gid,rid) for rid in papers])
+        return gid
+
+    def graph_groups(self, ids=None):
+        result=[]
+        for row in self.db.execute('SELECT * FROM graph_groups ORDER BY created'):
+            group=dict(row)
+            members=[r[0] for r in self.db.execute('SELECT m.paper FROM graph_group_members m JOIN papers p ON p.id=m.paper WHERE m.group_id=?',(row['id'],))]
+            group['members']=[rid for rid in members if ids is None or rid in ids]
+            if group['members']:result.append(group)
+        return result
+
+    def rename_graph_group(self, gid, label):
+        label=str(label).strip()
+        if not label or len(label)>160:raise ValueError('请填写 1–160 字的关联原因。')
+        with self.db:self.db.execute('UPDATE graph_groups SET label=? WHERE id=?',(label,gid))
+
+    def remove_graph_group(self,gid):
+        with self.db:
+            self.db.execute('DELETE FROM graph_group_members WHERE group_id=?',(gid,))
+            self.db.execute('DELETE FROM graph_groups WHERE id=?',(gid,))
 
     def replace_document(self, rid, aid, staged, expected_sha):
         from library_core import digest,document_metadata

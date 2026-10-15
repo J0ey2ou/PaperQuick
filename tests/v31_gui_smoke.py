@@ -17,9 +17,15 @@ with tempfile.TemporaryDirectory(dir=base) as temp:
     source=Path(temp)/'demo.pdf';text_pdf(source);rid=lib.import_pdf(source,pid);other=lib.save({'title':'No PDF'},pid)
     lib.save({'title':'Updated filename'},rid=rid);lib.set_setting('template','{标题}')
     window.search.set('absent');window.select_all(True);assert window.tree.selection()==(rid,)
-    with patch('library_ui.messagebox.askyesno',return_value=True),patch('library_ui.messagebox.showinfo'):
+    original_attachment=lib.get(rid)['attachments'][0]['path']
+    from display_renaming import apply_display_names
+    def confirm_names(plans,skipped=0):
+        plans[0]['display_name']='Updated display name'
+        window.run('Save display name',lambda library:apply_display_names(library,plans))
+    with patch.object(window,'preview_renames',side_effect=confirm_names):
         window.rename_selected();wait(lambda:not window.busy)
-    assert Path(lib.get(rid)['attachments'][0]['path']).name=='Updated filename.pdf'
+    assert lib.get(rid)['display_name']=='Updated display name'
+    assert lib.get(rid)['attachments'][0]['path']==original_attachment
     window.select_all(False);assert len(window.tree.selection())==2
     app.open_reader(rid);reader=app.reader_page;wait(lambda:reader.count and not reader.loading and not reader.fit_pending)
     reader.context_note();root.update();reader.notes.insert('end','Context note');reader.save_notes();assert 'Context note' in lib.get(rid)['notes']

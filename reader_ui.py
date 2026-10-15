@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import time
 import uuid
-from library_core import Library
+from library_core import Library,display_name
 from pdf_reader_core import document_info,render_page,render_page_data,page_sizes,extract_text,region_text,original_pdf_annotations
 from references import parse_references
 from ui_theme import BG,PANEL,FG,MUTED,ACCENT,FONT,style_dialog
@@ -23,28 +23,49 @@ class ReaderPage(ReaderWorkflow):
         title=ttk.Frame(header);title.pack(side='left');ttk.Label(title,text='文献阅读',font=(FONT,21,'bold')).pack(anchor='w')
         self.title=tk.StringVar(value='打开 PDF 或 Word，在这里阅读与记录想法');ttk.Label(title,textvariable=self.title,style='Muted.TLabel',wraplength=670).pack(anchor='w',pady=(5,0))
         ttk.Button(header,text='打开 PDF / Word / TXT',command=self.choose_pdf).pack(side='right');ttk.Button(header,text='参考文献侧栏',command=self.reference_panel).pack(side='right',padx=8)
+        ttk.Button(header,text='最近阅读',command=self.toggle_recent_reading).pack(side='right')
+        self.recent_panel=ttk.Frame(self.frame,padding=(24,0,24,12))
+        recent_bar=ttk.Frame(self.recent_panel);recent_bar.pack(fill='x',pady=(0,6))
+        self.recent_hint=tk.StringVar(value='最近阅读 · 点击文献继续阅读')
+        ttk.Label(recent_bar,textvariable=self.recent_hint,style='Muted.TLabel').pack(side='left')
+        ttk.Button(recent_bar,text='收起',command=self.recent_panel.pack_forget,style='Compact.TButton').pack(side='right')
+        recent_list=ttk.Frame(self.recent_panel);recent_list.pack(fill='x')
+        self.recent_tree=ttk.Treeview(recent_list,columns=('title','time'),show='headings',height=4,selectmode='browse')
+        self.recent_tree.heading('title',text='文献标题');self.recent_tree.heading('time',text='最近阅读时间')
+        self.recent_tree.column('title',width=650);self.recent_tree.column('time',width=160,stretch=False)
+        recent_scroll=ttk.Scrollbar(recent_list,orient='vertical',command=self.recent_tree.yview)
+        recent_scroll.pack(side='right',fill='y');self.recent_tree.configure(yscrollcommand=recent_scroll.set);self.recent_tree.pack(fill='x',expand=True)
+        self.recent_tree.bind('<ButtonRelease-1>',self.open_recent_reading)
+        self.recent_tree.bind('<Return>',lambda _:self.open_recent_reading())
         self.controls_host=ttk.Panedwindow(self.frame,orient='horizontal');self.controls_host.pack(fill='x')
         control_left=ttk.Frame(self.controls_host);self.controls_host.add(control_left,weight=4)
-        document_tools=ttk.Frame(control_left,padding=(24,0,12,8));document_tools.pack(fill='x')
-        for label,command in [('正文与附件',self.attachment_panel),('附件比对',self.toggle_comparison),('Word / PDF 转换',self.conversion),('收起笔记',self.toggle_notes),('专注阅读',self.toggle_focus),('编辑原文',self.edit_document)]:ttk.Button(document_tools,text=label,command=command,width=9,style='Compact.TButton').pack(side='left',padx=(0,5))
-        toolbar=ttk.Frame(control_left,padding=(24,0,12,10));toolbar.pack(fill='x')
-        for label,command in [('上一页',lambda:self.change_page(-1)),('下一页',lambda:self.change_page(1)),('缩小',lambda:self.zoom(.85)),('放大',lambda:self.zoom(1.18)),('保存笔记',self.save_notes)]:ttk.Button(toolbar,text=label,command=command,width=7,style='Compact.TButton').pack(side='left',padx=(0,4))
-        ttk.Button(toolbar,text='适合宽度',command=self.fit_width,width=8,style='Compact.TButton').pack(side='left',padx=(0,4))
-        self.page_label=tk.StringVar(value='尚未打开文档');ttk.Label(toolbar,textvariable=self.page_label,style='Muted.TLabel',font=(FONT,9),wraplength=125).pack(side='left',padx=6)
-        tools=ttk.Frame(control_left,padding=(24,0,12,10));tools.pack(fill='x')
-        self.tool=tk.StringVar(value='选择文字');ttk.Label(tools,text='阅读工具').pack(side='left',padx=(0,6))
-        for label in ('选择文字','拖动阅读','框选高亮','框选批注'):
-            ttk.Radiobutton(tools,text=label,variable=self.tool,value=label).pack(side='left',padx=7)
+        from icon_toolbar import IconToolbar
+        self.tool=tk.StringVar(value='选择文字')
         self.annotation_color=tk.StringVar(value='黄色');self.colors={'黄色':'#ffd65c','绿色':'#66dfac','蓝色':'#76b9ff','粉色':'#f795c7'}
-        ttk.Combobox(tools,textvariable=self.annotation_color,values=list(self.colors),state='readonly',width=6).pack(side='left',padx=8)
-        self.page_input=tk.StringVar();entry=ttk.Entry(tools,textvariable=self.page_input,width=5);entry.pack(side='left',padx=(14,4));entry.bind('<Return>',lambda _:self.jump())
-        ttk.Button(tools,text='跳转页',command=self.jump,width=7,style='Compact.TButton').pack(side='left')
-        ttk.Button(tools,text='加书签',command=self.add_bookmark,width=7,style='Compact.TButton').pack(side='left',padx=6)
-        more=ttk.Frame(control_left,padding=(24,0,12,8));more.pack(fill='x')
-        ttk.Checkbutton(more,text='连续阅读',variable=self.continuous,command=self.toggle_continuous).pack(side='left')
-        ttk.Button(more,text='截图到笔记',command=self.screenshot_tool,width=11,style='Compact.TButton').pack(side='left',padx=6)
-        ttk.Button(more,text='返回分页阅读',command=self.show_paged_view,width=12,style='Compact.TButton').pack(side='left',padx=6)
-        ttk.Button(more,text='嵌入参考文献',command=self.dock_references,width=12,style='Compact.TButton').pack(side='left',padx=6)
+        self.page_input=tk.StringVar();self.page_label=tk.StringVar(value='尚未打开文档')
+        toolbar=IconToolbar(control_left);self.toolbar=toolbar;toolbar.pack(fill='x',padx=(24,12),pady=(0,6))
+        for icon,label,command in [
+            ('previous','上一页',lambda:self.change_page(-1)),('next','下一页',lambda:self.change_page(1)),
+            ('minus','缩小',lambda:self.zoom(.85)),('plus','放大',lambda:self.zoom(1.18)),('fit','适合宽度',self.fit_width),
+            ('save','保存笔记',self.save_notes),('document','正文与附件',self.attachment_panel),
+            ('compare','附件比对',self.toggle_comparison),('convert','Word / PDF 转换',self.conversion),
+            ('notes','显示 / 收起笔记',self.toggle_notes),('focus','专注阅读',self.toggle_focus),('edit','编辑原文',self.edit_document)]:
+            toolbar.add(icon,label,command)
+        for icon,label in [('select','选择文字'),('hand','拖动阅读'),('highlight','框选高亮'),('comment','框选批注')]:
+            toolbar.add(icon,label,lambda:None,variable=self.tool,value=label)
+        def choose_color():
+            menu=tk.Menu(toolbar,tearoff=False)
+            for name in self.colors:menu.add_radiobutton(label=name,variable=self.annotation_color,value=name)
+            try:menu.tk_popup(color_button.winfo_rootx(),color_button.winfo_rooty()+32)
+            finally:menu.grab_release()
+        color_button=toolbar.add('color','高亮 / 批注颜色',choose_color,color=lambda:self.colors[self.annotation_color.get()])
+        self.annotation_color.trace_add('write',lambda *_:toolbar.refresh_icons(force=True))
+        toolbar.add('bookmark','添加书签',self.add_bookmark)
+        toolbar.add('continuous','连续阅读 / 单页阅读',self.toggle_continuous,variable=self.continuous)
+        toolbar.add('camera','截图到笔记',self.screenshot_tool)
+        toolbar.add('document','返回分页阅读',self.show_paged_view)
+        toolbar.add('references','嵌入参考文献',self.dock_references)
+        toolbar.add_page(self.page_input,self.jump,self.page_label)
         body=ttk.Frame(self.frame,padding=(24,0));self.body=body;body.pack(fill='both',expand=True)
         splitter=ttk.Panedwindow(body,orient='horizontal');self.splitter=splitter;splitter.pack(fill='both',expand=True)
         notes_panel=ttk.Frame(splitter,style='Card.TFrame',padding=12,width=340);self.notes_panel=notes_panel
@@ -53,10 +74,9 @@ class ReaderPage(ReaderWorkflow):
         self.notebook=ttk.Notebook(notes_panel);self.notebook.pack(fill='both',expand=True)
         self.note_tab=ttk.Frame(self.notebook);self.annotation_tab=ttk.Frame(self.notebook)
         self.notebook.add(self.note_tab,text='笔记编辑');self.notebook.add(self.annotation_tab,text='高亮 / 批注')
-        note_buttons=ttk.Frame(self.note_tab);note_buttons.pack(fill='x',pady=6)
-        for i,(label,command) in enumerate([('编辑 / 新段落',self.new_paragraph),('插入页码',self.insert_page),('研究笔记模板',self.note_template),('导出笔记',self.export_notes),('加粗',lambda:self.format_note('bold')),('斜体',lambda:self.format_note('italic')),('插入图片',self.insert_note_image),('截图到笔记',self.screenshot_tool)]):
-            ttk.Button(note_buttons,text=label,command=command,width=13).grid(row=i//2,column=i%2,sticky='ew',padx=2,pady=2)
-        note_buttons.columnconfigure((0,1),weight=1)
+        note_buttons=IconToolbar(self.note_tab);self.note_toolbar=note_buttons;note_buttons.pack(fill='x',pady=3)
+        for icon,label,command in [('edit','编辑 / 新段落',self.new_paragraph),('document','插入页码',self.insert_page),('notes','研究笔记模板',self.note_template),('save','导出笔记',self.export_notes),('bold','加粗',lambda:self.format_note('bold')),('italic','斜体',lambda:self.format_note('italic')),('image','插入图片',self.insert_note_image),('camera','截图到笔记',self.screenshot_tool)]:
+            note_buttons.add(icon,label,command)
         self.notes=tk.Text(self.note_tab,height=4,width=28,bg='#0b1627',fg=FG,insertbackground=ACCENT,relief='solid',borderwidth=1,wrap='word',padx=12,pady=12,font=(FONT,11),undo=True,takefocus=True,state='normal',exportselection=False)
         note_scroll=ttk.Scrollbar(self.note_tab,command=self.notes.yview);note_scroll.pack(side='right',fill='y');self.notes.configure(yscrollcommand=note_scroll.set)
         self.notes.pack(fill='both',expand=True);self.notes.bind('<<Modified>>',self.notes_changed)
@@ -92,6 +112,27 @@ class ReaderPage(ReaderWorkflow):
         self.workflow_widgets()
         self.frame.after(100,self.poll)
 
+    def toggle_recent_reading(self):
+        if self.recent_panel.winfo_manager():
+            self.recent_panel.pack_forget();return
+        lib=Library(self.directory)
+        try:records=lib.recent_read()
+        finally:lib.close()
+        self.recent_tree.delete(*self.recent_tree.get_children())
+        for record in records:
+            self.recent_tree.insert('', 'end',iid=record['id'],values=(record['title'] or '未命名文献',time.strftime('%Y-%m-%d %H:%M',time.localtime(record['last_read']))))
+        self.recent_hint.set('最近阅读 · 最近 50 篇，点击文献继续阅读' if records else '还没有阅读记录，打开一篇文献后会显示在这里。')
+        self.recent_panel.pack(fill='x',after=self.header)
+
+    def open_recent_reading(self,event=None):
+        rid=self.recent_tree.identify_row(event.y) if event is not None else next(iter(self.recent_tree.selection()),None)
+        if not rid:return
+        try:
+            self.open(rid)
+            if self.rid==rid:self.recent_panel.pack_forget()
+        except (ValueError,OSError) as exc:
+            self.status.set('无法打开最近阅读的文献：'+str(exc))
+
     def open(self,rid,record_read=True):
         if self.busy:raise ValueError('正在收纳或转换文档，请完成后再切换文献。')
         if self.editor_dirty and not messagebox.askyesno('原文尚未保存','放弃本次原文修改并打开文献？',parent=self.frame):return
@@ -111,7 +152,7 @@ class ReaderPage(ReaderWorkflow):
             self.rid=rid;self.attachment_id=attachment['id'];self.source_path=self.directory/attachment['path'];self.path=None;self.page=0;self.count=0;self.generation+=1;self.loading=True;self.fit_pending=True;self.image_size=None
             self.document_canvas.reset()
             if record_read:lib.save({'read_count':record.get('read_count',0)+1,'last_read':time.time()},rid=rid)
-            self.title.set(record['title']);self.notes.configure(state='normal');self.notes.delete('1.0','end');self.notes.insert('1.0',record.get('notes',''));self.notes.edit_reset();self.notes.edit_modified(False);self.dirty=False
+            self.title.set(display_name(record));self.notes.configure(state='normal');self.notes.delete('1.0','end');self.notes.insert('1.0',record.get('notes',''));self.notes.edit_reset();self.notes.edit_modified(False);self.dirty=False
             self.load_note_images(record)
             for tag,ranges in record.get('note_styles',{}).items():
                 if tag in ('bold','italic'):
@@ -476,6 +517,7 @@ class ReaderPage(ReaderWorkflow):
 
     def attachments_changed(self):
         if not self.rid:return
+        if getattr(self,'on_library_changed',None):self.on_library_changed()
         lib=Library(self.directory)
         try:primary=lib.primary_attachment(self.rid);items=lib.get(self.rid)['attachments']
         finally:lib.close()

@@ -39,10 +39,9 @@ class App:
         self.email = ""
         self.preferences={}
         self.config_path = app_dir() / "settings.json"
-        try:
-            self.preferences=json.loads(self.config_path.read_text("utf-8"));self.email = self.preferences.get("email", "")
-        except (OSError, ValueError, AttributeError):
-            self.preferences={}
+        from preferences import load_preferences
+        self.preferences=load_preferences(self.config_path);self.email=self.preferences.get('email','')
+        self._settings_flush=None
         install_theme(root)
         window_icon(root)
         self.library_window = None
@@ -123,7 +122,7 @@ class App:
         tk.Label(footer, text="开放版本优先 · 未找到免费原文时提供出版社入口 · 查询内容会发送到文献检索服务", bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w")
         self.empty("复制一次，找到原文", "支持英文论文标题、DOI、arXiv，以及可读取的公众号 / 新闻推送。\n遇到中文推送标题或网页验证时，粘贴其中的英文论文标题最准确。")
         self.root.after(1000 if self.root.state()=='withdrawn' and not self.busy else 100, self.poll)
-        self.input.focus_set()
+        if root.state()!='withdrawn':self.input.focus_set()
         menu = tk.Menu(self.input, tearoff=False)
         menu.add_command(label="查询选中的文献", command=self.search_selection)
         menu.add_command(label="粘贴并查找", command=self.paste_search)
@@ -151,12 +150,14 @@ class App:
             self.library_window.on_compare=self.open_attachment
             self.library_window.lookup_email=lambda:self.email
             self.library_window.before_remove=self.before_remove_papers
+            self.library_window.on_library_changed=self.refresh_library_views
         self.show_page('library')
         if paper:
             self.library_window.collect(paper)
         return self.library_window
 
     def show_page(self, key):
+        if self.current_page=='settings' and key!='settings':self.flush_settings()
         if key!='reader' and self.reader_page and self.reader_page.focus_mode:self.reader_page.toggle_focus()
         if key!=self.current_page:self.stop_reading()
         if key=='library' and not self.library_window:
@@ -165,6 +166,7 @@ class App:
             from graph_ui import GraphPage
             self.graph_page=GraphPage(self.page_host,self.library_directory)
             self.graph_page.on_reader=self.open_reader
+            self.graph_page.on_attachment=self.open_attachment
             self.graph_page.on_query=self.query_reference
             self.graph_page.on_collect=self.collect_reference
             self.graph_page.on_note=self.open_note
@@ -174,6 +176,7 @@ class App:
             self.reader_page.on_open_related=self.open_reader
             self.reader_page.on_focus_mode=self.reader_focus_mode
             self.reader_page.on_document_change=self.stop_reading
+            self.reader_page.on_library_changed=self.refresh_library_views
         for child in self.page_host.winfo_children():child.pack_forget()
         target=self.query_page if key=='query' else self.library_window.win if key=='library' else self.graph_page.frame if key=='graph' else self.reader_page.frame if key=='reader' else self.settings_page
         target.pack(fill='both',expand=True)
@@ -222,6 +225,15 @@ class App:
         try:self.reader_page.open(rid)
         except Exception as exc:messagebox.showerror('文档未打开',str(exc),parent=self.root)
 
+    def refresh_library_views(self):
+        if self.graph_page:self.graph_page.refresh()
+        if self.reader_page and self.reader_page.rid:
+            from library_core import Library,display_name
+            lib=Library(self.library_directory)
+            try:self.reader_page.title.set(display_name(lib.get(self.reader_page.rid)))
+            except ValueError:pass
+            finally:lib.close()
+
     def reader_focus_mode(self,focused):
         if focused:self.navigation.pack_forget()
         else:self.navigation.pack(fill='x',padx=26,pady=(18,8),before=self.page_host)
@@ -262,6 +274,7 @@ class App:
         else:self.open_url(link.url)
 
     def close(self):
+        self.flush_settings()
         word=getattr(self.library_window,'word_citations',None)
         if word and word.busy:
             word.status.set('Word 引用仍在处理，完成后即可退出。');return
@@ -500,7 +513,13 @@ class App:
             lines.append("")
         self.copy("\n".join(lines))
 
+    def flush_settings(self):
+        callback=getattr(self,'_settings_flush',None)
+        if callback and self.current_page=='settings' and self.settings_page and self.settings_page.winfo_exists():callback()
+
     def settings(self):
+        self.flush_settings()
+        self._settings_flush=None
         if self.settings_page and self.settings_page.winfo_exists():self.settings_page.destroy()
         dialog = ttk.Frame(self.page_host);self.settings_page=dialog
         viewport=tk.Canvas(dialog,bg=BG,highlightthickness=0)
@@ -512,10 +531,16 @@ class App:
         viewport.bind('<MouseWheel>',lambda e:viewport.yview_scroll(-int(e.delta/120),'units'))
         self.settings_panel=panel
         ttk.Label(panel,text='设置',font=(FONT,21,'bold')).pack(anchor='w',pady=(0,12))
-        from ui_theme import SKINS,apply_skin
+        from ui_theme import SKINS,GLASS_SKINS,apply_skin
         ttk.Label(panel,text='界面皮肤（即时预览）',font=(FONT,12,'bold')).pack(anchor='w')
-        skin=tk.StringVar(value=self.skin);skin_combo=ttk.Combobox(panel,textvariable=skin,values=list(SKINS),state='readonly',width=30);skin_combo.pack(anchor='w',pady=(7,18))
-        def preview(_=None):self.skin=apply_skin(self.root,skin.get())
+        skin=tk.StringVar(value=self.skin);skin_combo=ttk.Combobox(panel,textvariable=skin,values=list(SKINS),state='readonly',width=30);skin_combo.pack(anchor='w',pady=(7,6))
+        skin_hint=tk.StringVar()
+        ttk.Label(panel,textvariable=skin_hint,style='Muted.TLabel',wraplength=460).pack(anchor='w',pady=(0,18))
+        def describe_skin():
+            skin_hint.set('彩色琉璃质感 · 窗口完全不透明，不透出后方页面；文字和图片保持清晰。' if skin.get() in GLASS_SKINS else '实色界面 · 清晰阅读 · 切换后立即预览，修改自动保存，下次打开继续使用。')
+        def preview(_=None):
+            self.skin=apply_skin(self.root,skin.get());describe_skin()
+        describe_skin()
         skin_combo.bind('<<ComboboxSelected>>',preview)
         ttk.Label(panel, text="自定义全局快捷键", font=(FONT, 12, "bold")).pack(anchor="w")
         ttk.Label(panel, text="点击输入框后按下组合键，或手动填写，例如 Ctrl + Alt + J。\n至少两个修饰键（Ctrl / Alt / Shift）+ 字母、数字或 F1–F24。", justify="left").pack(anchor="w", pady=(8, 10))
@@ -538,7 +563,7 @@ class App:
                 shortcut.set(" + ".join(modifiers + [key]))
                 return "break"
         entry.bind("<KeyPress>", capture)
-        ttk.Label(panel, text="保存后启动 / 更新托盘助手；占用时会提示并保留可用组合。", foreground=MUTED).pack(anchor="w", pady=(8, 20))
+        ttk.Label(panel, text="修改自动保存；运行中的助手会读取新组合。点击下方按钮可启动助手。", foreground=MUTED).pack(anchor="w", pady=(8, 20))
         ttk.Label(panel, text="Unpaywall 邮箱（可选）", font=(FONT, 11, "bold")).pack(anchor="w")
         ttk.Label(panel, text="留空即可查询；填写邮箱可补充更多开放版本。\n邮箱将发送到 Unpaywall，仅保存在本机设置文件。", justify="left").pack(anchor="w", pady=8)
         email = tk.StringVar(value=self.email)
@@ -565,39 +590,67 @@ class App:
         def restore_template():template_editor.delete('1.0','end');template_editor.insert('1.0',DEFAULT_NOTE_TEMPLATE)
         ttk.Button(panel,text='恢复默认模板',command=restore_template).pack(anchor='w',pady=6)
 
-        def save():
-            value = email.get().strip()
-            if value and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
-                messagebox.showerror("邮箱格式不正确", "请填写有效邮箱，或留空。", parent=dialog)
-                return
+        feedback=tk.StringVar(value='修改会自动保存，下次打开继续使用。')
+        pending=[None]
+        def save(activate=False):
+            if pending[0]:
+                self.root.after_cancel(pending[0]);pending[0]=None
+            if not dialog.winfo_exists():return
+            errors=[];value=email.get().strip();updates={'skin':skin.get()}
+            if value and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+",value):errors.append('邮箱格式不正确，请检查或留空。')
+            else:updates['email']=value
             try:
-                canonical, _, _ = parse_shortcut(shortcut.get())
-                size=int(marker_size.get());template=template_editor.get('1.0','end-1c')
-                if not 8<=size<=48:raise ValueError('标记大小应在 8–48 之间。')
-                if len(template)>12000:raise ValueError('笔记模板最多 12000 个字符。')
-                save_shortcut(app_dir(), canonical)
-                self.preferences.update(email=value,skin=skin.get());self.config_path.write_text(json.dumps(self.preferences, ensure_ascii=False, indent=2), "utf-8")
+                from preferences import save_preferences
+                self.preferences=save_preferences(self.config_path,updates)
+                self.email=self.preferences.get('email','')
+                try:
+                    canonical,_,_=parse_shortcut(shortcut.get())
+                    if canonical!=load_shortcut(app_dir()):save_shortcut(app_dir(),canonical)
+                except ValueError:errors.append('快捷键尚未填写完整，已保留原来的组合。')
                 if startup.get()!=startup_enabled():configure_startup(startup.get(),app_dir()/'文献直达.exe')
+                size=None
+                try:
+                    size=int(marker_size.get())
+                    if not 8<=size<=48:raise ValueError()
+                except ValueError:size=None;errors.append('标记大小应在 8–48 之间。')
+                template=template_editor.get('1.0','end-1c')
                 library=Library(self.library_directory)
                 try:
-                    library.set_setting('reader_marker_size',size);library.set_setting('research_note_template',template);library.set_setting('continuous_reading',continuous.get())
+                    if size is not None:library.set_setting('reader_marker_size',size)
+                    if len(template)<=12000:library.set_setting('research_note_template',template)
+                    else:errors.append('笔记模板最多 12000 个字符，已保留上次保存内容。')
+                    library.set_setting('continuous_reading',continuous.get())
                 finally:library.close()
                 if self.reader_page:
-                    self.reader_page.marker_size=size;self.reader_page.draw_annotations()
+                    if size is not None:self.reader_page.marker_size=size;self.reader_page.draw_annotations()
                     changed=self.reader_page.continuous.get()!=continuous.get();self.reader_page.continuous.set(continuous.get())
                     if changed and self.reader_page.path and not self.reader_page.loading:self.reader_page.render()
-            except (OSError, ValueError) as exc:
-                messagebox.showerror("设置未保存", str(exc), parent=dialog)
-                return
-            self.email = value
-            self.skin=apply_skin(self.root,skin.get());feedback.set('设置已保存，皮肤立即生效。')
-            self.start_selection_helper()
-            # The running helper reloads its config every 1.5 seconds.
-            self.root.after(1200, self.read_shortcut_status)
-        ttk.Button(panel, text="保存并启用", style="Accent.TButton", command=save).pack(anchor="e", pady=(20, 0))
-        feedback=tk.StringVar();ttk.Label(panel,textvariable=feedback,style='Muted.TLabel').pack(anchor='w')
+                self.skin=apply_skin(self.root,skin.get())
+            except Exception as exc:
+                feedback.set('暂时未能保存，请检查文件夹是否可写：'+str(exc));return
+            feedback.set(' '.join(errors) if errors else '已自动保存，下次打开继续使用。')
+            if activate and not errors:
+                self.start_selection_helper();self.root.after(1200,self.read_shortcut_status)
+        def schedule(*_):
+            if pending[0]:self.root.after_cancel(pending[0])
+            pending[0]=self.root.after(450,save)
+        def template_changed(_=None):
+            if template_editor.edit_modified():template_editor.edit_modified(False);schedule()
+        template_editor.edit_modified(False);template_editor.bind('<<Modified>>',template_changed)
+        for variable in (skin,shortcut,email,startup,continuous,marker_size):variable.trace_add('write',schedule)
+        self._settings_flush=save
+        self.settings_vars={'skin':skin,'shortcut':shortcut,'email':email,'startup':startup,'continuous':continuous,'marker_size':marker_size}
+        self.settings_template=template_editor;self.settings_feedback=feedback
+        ttk.Label(panel,textvariable=feedback,style='Muted.TLabel',wraplength=700).pack(anchor='w',pady=(12,6))
+        ttk.Button(panel,text='保存并启用快捷键',style='Accent.TButton',command=lambda:save(True)).pack(anchor='e',pady=(6,0))
+        from app_version import VERSION,PROJECT_URL,DEVELOPER
+        ttk.Separator(panel).pack(fill='x',pady=18)
+        ttk.Label(panel,text='关于文献直达',font=(FONT,12,'bold')).pack(anchor='w')
+        ttk.Label(panel,text=f'版本  {VERSION}   ·   开发者  {DEVELOPER}',style='Muted.TLabel').pack(anchor='w',pady=8)
+        ttk.Label(panel,text=PROJECT_URL,style='Muted.TLabel').pack(anchor='w')
+        ttk.Button(panel,text='打开开发者项目',command=lambda:webbrowser.open(PROJECT_URL)).pack(anchor='w',pady=8)
         self.show_page('settings')
-        entry.focus_set()
+
 
 
 def main():
@@ -620,6 +673,9 @@ def main():
             pass
     root = tk.Tk()
     if '--background' in sys.argv:root.withdraw()
+    if len(sys.argv)==3 and sys.argv[1]=='--verify-compact-bundle':
+        from compact_bundle_check import run
+        run(root,sys.argv[2]);return
     # 只用于打包验收：加载 Tcl/Tk 和结果界面后写入指定报告，不联网。
     if len(sys.argv) == 3 and sys.argv[1] == "--verify-bundle":
         from paper_finder import Paper, Result
@@ -790,4 +846,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv)==3 and sys.argv[1].startswith('--verify-'):
+        try:main()
+        except Exception:
+            import traceback
+            Path(sys.argv[2]).write_text(json.dumps({'passed':False,'error':traceback.format_exc()},ensure_ascii=False,indent=2),'utf-8')
+            sys.exit(1)
+    else:main()

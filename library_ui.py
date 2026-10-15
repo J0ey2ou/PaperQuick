@@ -8,7 +8,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import webbrowser
-from library_core import Library, FIELDS, DEFAULT_TEMPLATE, validate_template, filename,local_attachments,readable_attachments
+from library_core import Library, FIELDS, DEFAULT_TEMPLATE, validate_template, filename,local_attachments,readable_attachments,display_name
 from download_actions import resolve_download
 from graph_view import write_graph
 import endnote_sync
@@ -72,19 +72,20 @@ class LibraryWindow:
         scroll.pack(side='right',fill='y');self.tree.pack(fill='both',expand=True)
         self.tree.bind('<Double-1>',lambda _:self.open_pdf());self.tree.bind('<<TreeviewSelect>>',self.detail)
         self.context_menu=tk.Menu(self.win,tearoff=False,bg=PANEL,fg=FG,activebackground='#1c485f',activeforeground=ACCENT)
-        for title,command in [('下载原文（打开下载页面）',self.download_selected),('下载并自动归档',lambda:self.download_selected(archive=True)),('按规则重新命名',self.rename_selected),('选择所有文献',lambda:self.select_all(False)),('选择所有已下载文献',lambda:self.select_all(True)),('阅读正文',self.open_pdf),('关联已下载 PDF',self.attach_pdf),('编辑信息',self.edit),('分配课题',self.assign)]:
+        for title,command in [('下载原文（打开下载页面）',self.download_selected),('下载并自动归档',lambda:self.download_selected(archive=True)),('识别 / 修改显示名称',self.rename_selected),('选择所有文献',lambda:self.select_all(False)),('选择所有已下载文献',lambda:self.select_all(True)),('阅读正文',self.open_pdf),('关联已下载 PDF',self.attach_pdf),('编辑信息',self.edit),('分配课题',self.assign)]:
             self.context_menu.add_command(label=title,command=command)
         self.tree.bind('<Button-3>',self.show_context_menu)
         self.context_menu.add_separator();self.context_menu.add_command(label='插入 Word 引用 / 参考文献',command=self.word)
         self.context_menu.add_command(label='附件管理 / 比对阅读',command=self.attachments)
+        self.context_menu.add_command(label='添加文献关系',command=self.add_relationship)
         self.context_menu.add_command(label='Word / PDF 互转',command=self.convert_document)
         self.context_menu.add_separator();self.context_menu.add_command(label='删除文献',command=self.delete_selected);self.context_menu.add_command(label='恢复最近删除',command=self.restore_deleted)
         self.tree.bind('<Control-a>',lambda _:self.select_all(False))
         selection_bar=ttk.Frame(footer,padding=(24,8,24,0));selection_bar.pack(fill='x')
-        for title,command in [('选择所有文献',lambda:self.select_all(False)),('选择所有已下载',lambda:self.select_all(True)),('按规则重新命名',self.rename_selected),('删除文献',self.delete_selected),('恢复最近删除',self.restore_deleted)]:
+        for title,command in [('选择所有文献',lambda:self.select_all(False)),('选择所有已下载',lambda:self.select_all(True)),('识别 / 修改显示名称',self.rename_selected),('删除文献',self.delete_selected),('恢复最近删除',self.restore_deleted)]:
             b=ttk.Button(selection_bar,text=title,command=command);b.pack(side='left',padx=(0,8));self.controls.append(b)
         actions=ttk.Frame(footer,padding=(24,8,24,8));actions.pack(fill='x')
-        for title,command in [('下载原文',self.download_selected),('阅读正文',self.open_pdf),('附件 / 比对',self.attachments),('编辑信息',self.edit),('分配课题',self.assign),('标记已读',lambda:self.mark('已读')),('标记未读',lambda:self.mark('未读'))]:
+        for title,command in [('下载原文',self.download_selected),('阅读正文',self.open_pdf),('附件 / 比对',self.attachments),('编辑信息',self.edit),('添加关系',self.add_relationship),('分配课题',self.assign),('标记已读',lambda:self.mark('已读')),('标记未读',lambda:self.mark('未读'))]:
             button=ttk.Button(actions,text=title,command=command,style='Accent.TButton' if title=='阅读正文' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
         self.details=tk.StringVar(value='选择文献可查看 DOI、摘要和附件位置。')
         detail_card=ttk.Frame(footer,style='Card.TFrame',padding=(16,8));detail_card.pack(fill='x',padx=24)
@@ -159,8 +160,8 @@ class LibraryWindow:
         self.scope_title.set(self.library.project(self.current_project)['name'] if self.current_project else '全部文献')
         index=0
         for r in self.library.records(self.current_project):
-            if query not in ' '.join(str(r.get(k,'')) for k in ('title','doi','authors','keywords')).lower():continue
-            self.tree.insert('','end',iid=r['id'],values=(r['title'],r['year'],self.library.project(r['primary_project'])['name'],r['status'],'已归档' if any(a.get('role')=='primary' for a in readable_attachments(r)) else '待添加'),tags=('odd' if index%2 else 'even','read' if r['status']=='已读' else ''))
+            if query not in ' '.join(str(r.get(k,'')) for k in ('title','display_name','doi','authors','keywords')).lower():continue
+            self.tree.insert('','end',iid=r['id'],values=(display_name(r),r['year'],self.library.project(r['primary_project'])['name'],r['status'],'已归档' if any(a.get('role')=='primary' for a in readable_attachments(r)) else '待添加'),tags=('odd' if index%2 else 'even','read' if r['status']=='已读' else ''))
             index+=1
             if r['id'] in selected:self.tree.selection_add(r['id'])
 
@@ -271,27 +272,45 @@ class LibraryWindow:
         self.current_project=None;self.search.set('');self.refresh()
         ids=[r['id'] for r in self.library.records() if not downloaded or any(a.get('role')=='primary' for a in readable_attachments(r))]
         self.tree.selection_set(ids)
-        self.status.set(f'已选择全库 {len(ids)} 篇'+('已下载文献' if downloaded else '文献')+'；可点击“按规则重新命名”。')
+        self.status.set(f'已选择全库 {len(ids)} 篇'+('已下载文献' if downloaded else '文献')+'；可点击“识别 / 修改显示名称”。')
         return 'break'
 
     def rename_selected(self):
         if self.busy:return
-        ids=self.selected()
+        self.rename_records(self.selected())
+
+    def add_relationship(self):
+        if self.busy:return
+        from relations_ui import relationship_editor
+        def saved():
+            self.status.set('文献关系已保存，可在图谱中查看关联原因。')
+            if getattr(self,'on_library_changed',None):self.on_library_changed()
+        relationship_editor(self.win,self.library.root,self.selected(),saved)
+
+    def rename_records(self,ids,use_rule=False):
         if not ids:return
-        records=[self.library.get(rid) for rid in ids];downloaded=[r for r in records if local_attachments(r)]
-        if not downloaded:self.status.set('所选文献没有本地附件可重命名，网址链接保持不变。');return
-        preview=[]
-        for r in downloaded[:6]:
-            for attachment in local_attachments(r)[:3]:preview.append(Path(attachment['path']).name+'\n→ '+self.library.target(r,attachment).name)
-        skipped=len(records)-len(downloaded)
-        if not messagebox.askyesno('按规则重新命名',f'将对 {len(downloaded)} 篇文献的已归档附件应用各自主课题的命名规则。\n未下载的 {skipped} 篇跳过；原始导入文件不改动。\n\n'+'\n\n'.join(preview)+'\n\n同名文件会自动添加后缀。继续？',parent=self.win):return
+        from display_renaming import prepare_display_names
         def work(lib):
-            count=0;errors=[]
-            for r in downloaded:
-                try:count+=len(lib.rename(r['id']))
-                except Exception as exc:errors.append(r['title'][:60]+': '+str(exc))
-            return f'已处理 {count} 个附件；跳过 {skipped} 篇无本地附件文献。'+ ('\n未完成：\n'+'\n'.join(errors[:8]) if errors else '')
-        self.run('正在按规则重新命名',work,lambda result:messagebox.showinfo('重命名完成',result,parent=self.win))
+            plans=prepare_display_names(lib,ids)
+            if use_rule:
+                from display_renaming import display_template,display_name_from_rule
+                for plan in plans:
+                    pid=plan['before']['primary_project']
+                    plan['display_name']=display_name_from_rule(plan['fields'],lib.project(pid)['name'],display_template(lib,pid),lib.setting('display_title_length',500))
+            return plans
+        self.run('正在读取文献信息（只修改软件显示名称）',work,self.preview_renames)
+
+    def preview_renames(self,plans,skipped=0):
+        from display_name_ui import DisplayNameDialog
+        from display_renaming import apply_display_names
+        def accept(confirmed):
+            def done(result):
+                text=f"已更新 {result['count']} 篇文献的显示名称，附件文件名保持不变。"
+                if result['errors']:text+='\n跳过 / 未完成：\n'+'\n'.join(result['errors'])
+                self.status.set(text.splitlines()[0]);messagebox.showinfo('重命名完成',text,parent=self.win)
+                if getattr(self,'on_library_changed',None):self.on_library_changed()
+            self.run('正在保存文献显示名称',lambda lib:apply_display_names(lib,confirmed),done)
+        return DisplayNameDialog(self.win,self.library,plans,accept)
 
     def download_selected(self,archive=False):
         if self.busy:self.status.set('下载 / 归档仍在进行，请等待完成。');return
@@ -372,37 +391,32 @@ class LibraryWindow:
         self.refresh()
 
     def naming(self):
-        dialog=tk.Toplevel(self.win);style_dialog(dialog);dialog.title('自动命名规则');panel=ttk.Frame(dialog,padding=20);panel.pack(fill='both')
+        from display_renaming import display_template,display_name_from_rule
+        dialog=tk.Toplevel(self.win);style_dialog(dialog);dialog.title('显示名称生成规则');panel=ttk.Frame(dialog,padding=20);panel.pack(fill='both')
         scope=self.current_project
         ttk.Label(panel,text='当前课题规则' if scope else '全库默认规则',font=('Microsoft YaHei UI',12,'bold')).pack(anchor='w')
-        ttk.Label(panel,text='支持 {年份} {第一作者} {标题} {DOI} {课题}；文字、空格、下划线可直接填写。\n新导入时自动命名；已归档文件只在点击“批量应用”后重命名。').pack(anchor='w',pady=10)
-        template=tk.StringVar(value=self.library.template(scope) if scope else self.library.setting('template',DEFAULT_TEMPLATE))
+        ttk.Label(panel,text='支持 {年份} {第一作者} {标题} {期刊} {DOI} {课题}。\n只生成软件中的显示名称，不更改原文件或归档附件的文件名。').pack(anchor='w',pady=10)
+        template=tk.StringVar(value=display_template(self.library,scope) if scope else self.library.setting('display_name_template','{标题}'))
         ttk.Entry(panel,textvariable=template,width=70).pack(fill='x')
-        length=tk.StringVar(value=str(self.library.setting('title_length',80)));ttk.Label(panel,text='标题最大字符数（20–120）').pack(anchor='w',pady=(10,3));ttk.Entry(panel,textvariable=length,width=8).pack(anchor='w')
+        length=tk.StringVar(value=str(self.library.setting('display_title_length',500)));ttk.Label(panel,text='标题最大字符数（20–500）').pack(anchor='w',pady=(10,3));ttk.Entry(panel,textvariable=length,width=8).pack(anchor='w')
         result=tk.StringVar();ttk.Label(panel,textvariable=result,wraplength=600).pack(anchor='w',pady=12)
         def values():
             validate_template(template.get());n=int(length.get())
-            if not 20<=n<=120:raise ValueError('标题长度应在 20–120 之间。')
+            if not 20<=n<=500:raise ValueError('标题长度应在 20–500 之间。')
             return template.get(),n
         def preview(*_):
             try:
                 t,n=values();records=self.library.records(scope);sample=records[0] if records else {'title':'Example research paper','authors':'Wang, Li','year':'2026'}
-                result.set('示例：'+filename(sample,self.library.project(scope)['name'] if scope else '示例课题',t,n))
+                result.set('显示名称示例：'+display_name_from_rule(sample,self.library.project(scope)['name'] if scope else '示例课题',t,n))
             except Exception as exc:result.set(str(exc))
         template.trace_add('write',preview);length.trace_add('write',preview);preview()
         def save(batch=False):
             try:t,n=values()
             except Exception as exc:messagebox.showerror('模板',str(exc),parent=dialog);return
-            if batch:
-                records=self.library.records(scope)
-                sample='\n'.join(f"{a['path']}\n→ {self.library.target(r,a,template=t,title_length=n).name}" for r in records[:8] for a in local_attachments(r)[:2])
-                if not messagebox.askyesno('重命名预览',sample+'\n\n确认对当前范围全部附件应用？原始导入文件保持不变。',parent=dialog):return
-            if scope:
-                with self.library.db:self.library.db.execute('UPDATE projects SET template=? WHERE id=?',(t,scope))
-            else:self.library.set_setting('template',t)
-            self.library.set_setting('title_length',n);dialog.destroy()
-            if batch:self.run('重命名本地附件',lambda lib:sum(len(lib.rename(r['id'])) for r in lib.records(scope)),lambda count:self.status.set(f'已重命名 {count} 个文件。'))
-        buttons=ttk.Frame(panel);buttons.pack(fill='x');ttk.Button(buttons,text='保存（用于后续导入）',command=save).pack(side='left');ttk.Button(buttons,text='预览并批量应用',command=lambda:save(True)).pack(side='right')
+            self.library.set_setting('display_name_template:'+scope if scope else 'display_name_template',t)
+            self.library.set_setting('display_title_length',n);dialog.destroy()
+            if batch:self.rename_records([r['id'] for r in self.library.records(scope)],use_rule=True)
+        buttons=ttk.Frame(panel);buttons.pack(fill='x');ttk.Button(buttons,text='保存显示规则',command=save).pack(side='left');ttk.Button(buttons,text='预览并批量修改显示名称',command=lambda:save(True)).pack(side='right')
 
     def graph(self):
         if getattr(self,'on_graph',None):self.on_graph();return

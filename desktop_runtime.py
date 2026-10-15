@@ -79,6 +79,7 @@ class DesktopRuntime:
         except OSError:return False
 
     def hide(self):
+        self.app.flush_settings()
         if not self.tray_ready():self.app.status.set('托盘尚未就绪，窗口将保持打开。');self.show();return
         if self.root.grab_current():self.root.grab_current().lift();return
         try:self.app.stop_reading()

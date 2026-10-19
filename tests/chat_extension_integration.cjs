@@ -24,16 +24,23 @@ const checks=[];
 let context;
 const mode=process.argv[2]||'baseline';
 
-function fixture({stripHash=false,plainChip=false,noInput=false,failUpload=false}={}) {
+function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=false,remount=false,nativeEditor=false,rejectText=false}={}) {
   return `<!doctype html><meta charset="utf-8"><title>Isolated chat composer fixture</title>
   ${stripHash?'<script>history.replaceState(null,"",location.pathname)</script>':''}
+  ${hiddenComposer?'<textarea id="prompt-textarea" hidden></textarea>':''}
   <main><form><div><div id="prompt-textarea" class="ProseMirror" contenteditable="true"><p><br></p></div></div>
   <div id="attachments"></div><button type="button" data-testid="composer-plus-btn">Add</button></form>
   ${noInput?'':'<input type="file" multiple accept="application/pdf,image/png" hidden>'}</main>
   <script>
   window.fixture={uploads:[],draft:'',sends:0};
-  const editor=document.querySelector('#prompt-textarea');
-  editor.addEventListener('input',()=>{window.fixture.draft=editor.innerText.trim()});
+  let editor=document.querySelector('[contenteditable=true]');
+  function track(event){
+    ${rejectText?"setTimeout(()=>{editor.replaceChildren();window.fixture.draft='';},100);":''}
+    ${nativeEditor?"if(!event.isTrusted){editor.replaceChildren();window.fixture.draft='';return}":''}
+    window.fixture.draft=editor.innerText.trim();
+    ${remount?"if(!window.fixture.remounted){window.fixture.remounted=true;setTimeout(()=>{const replacement=editor.cloneNode(false);editor.replaceWith(replacement);editor=replacement;editor.addEventListener('input',track);window.fixture.draft='';},700)}":''}
+  }
+  editor.addEventListener('input',track);
   async function upload(files){for(const file of files){
     const form=new FormData();form.append('file',file);
     const chip=document.createElement('div');chip.className='fixture-attachment';
@@ -79,7 +86,7 @@ function fixture({stripHash=false,plainChip=false,noInput=false,failUpload=false
       uploads.push(route.request().postDataBuffer());
       await route.fulfill({status:mode==='upload-failure'?500:200,contentType:'application/json',body:'{}'});return;
     }
-    await route.fulfill({contentType:'text/html',body:fixture({stripHash:mode==='stripped-hash',plainChip:mode==='plain-chip',noInput:mode==='drop',failUpload:mode==='upload-failure'})});
+    await route.fulfill({contentType:'text/html',body:fixture({stripHash:mode==='stripped-hash',plainChip:mode==='plain-chip',noInput:mode==='drop',hiddenComposer:mode==='hidden-composer',remount:mode==='remount',nativeEditor:mode==='native-editor',rejectText:mode==='reject-text'})});
   });
   // Block all unrelated external requests; only fixture documents reach the bridge.
   const handoff=await issue({image:true,local:['local-launch','no-extension','reuse'].includes(mode)});
@@ -90,6 +97,11 @@ function fixture({stripHash=false,plainChip=false,noInput=false,failUpload=false
     assert((await page.locator('#setup').textContent()).includes('加载解压缩的扩展'));
     assert.equal((await issue({status:true})).state,'waiting-extension');
     checks.push('Missing extension shows setup steps and preserves selected text on a local page');
+  }else if(mode==='reject-text'){
+    await waitState('error');
+    assert.equal(await page.locator('[contenteditable=true]').innerText(),'');
+    assert.equal(uploads.length,0);
+    checks.push('A webpage that discards input reports failure and never claims the selection or attachments are ready');
   }else if(mode==='upload-failure'){
     await page.waitForFunction(()=>window.fixture?.draft.includes('Selected passage'),{},{timeout:20000});
     await waitState('upload-error');
@@ -110,6 +122,40 @@ function fixture({stripHash=false,plainChip=false,noInput=false,failUpload=false
   checks.push('Real file input/drop sends document and image to the isolated upload fixture');
   checks.push('Selected text enters the browser contenteditable; no message is sent');
   await waitState('ready');
+  if(['hidden-composer','remount','native-editor'].includes(mode)){
+    await new Promise(resolve=>setTimeout(resolve,1400));
+    assert((await page.locator('[contenteditable=true]').innerText()).includes('Selected passage'));
+    if(mode==='hidden-composer')assert.equal(await page.locator('textarea[hidden]').inputValue(),'');
+    checks.push('Visible rich-text editor retains the selection through hidden controls, native editing and hydration');
+  }
+  if(['cleared-draft','retry-route','preserve-draft'].includes(mode)){
+    const next=await issue({quote:'A second passage from the same paper.',local:true});
+    if(mode==='cleared-draft')await page.evaluate(()=>{
+      document.querySelector('[contenteditable=true]').replaceChildren();window.fixture.draft='';
+    });
+    const incoming=await context.newPage();await incoming.goto(next.url,{waitUntil:'commit'});
+    if(mode!=='cleared-draft'){
+      await incoming.waitForSelector('#paperquick-chat-status',{state:'attached'});
+      await new Promise(resolve=>setTimeout(resolve,500));
+      assert((await page.locator('[contenteditable=true]').innerText()).includes('Selected passage'));
+      assert.equal(context.pages().filter(p=>p.url().startsWith('https://chatgpt.com/')).length,2);
+      checks.push('An actual unsent draft stays untouched and its incoming handoff stays open');
+      if(mode==='retry-route'){
+        await page.evaluate(()=>{document.querySelector('[contenteditable=true]').replaceChildren();window.fixture.draft='';});
+        // Dispatch within the fixture DOM across extension isolated worlds;
+        // no mouse, keyboard, OS input or foreground window control.
+        await incoming.locator('#paperquick-chat-status').evaluate(node=>node.shadowRoot.querySelector('button').dispatchEvent(new Event('click')));
+      }
+    }
+    if(mode!=='preserve-draft'){
+      await page.waitForFunction(()=>window.fixture?.draft.includes('A second passage'),{},{timeout:20000});
+      await waitState('ready');
+      if(!incoming.isClosed())await incoming.waitForEvent('close',{timeout:5000});
+      assert.equal(context.pages().filter(p=>p.url().startsWith('https://chatgpt.com/')).length,1);
+      assert.equal((await page.evaluate(()=>window.fixture)).uploads.length,2);
+      checks.push('An empty composer releases the stale lock; retry routes back to the original tab');
+    }
+  }
   if(mode==='reuse'){
     await page.evaluate(()=>window.sendFixture());
     await waitState('bound');
@@ -119,6 +165,7 @@ function fixture({stripHash=false,plainChip=false,noInput=false,failUpload=false
     const incoming=await context.newPage();await incoming.goto(next.url,{waitUntil:'commit'});
     await page.waitForFunction(()=>window.fixture?.draft.includes('A second passage'),{},{timeout:20000});
     await waitState('ready');
+    if(!incoming.isClosed())await incoming.waitForEvent('close',{timeout:5000});
     assert.equal((await page.evaluate(()=>window.fixture)).uploads.length,2);
     assert.equal(context.pages().filter(p=>p.url().startsWith('https://chatgpt.com/')).length,1);
     checks.push('After sending the fixture message, the same document reuses its bound tab without reuploading the primary');

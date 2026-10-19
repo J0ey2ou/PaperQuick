@@ -7,24 +7,31 @@
   const route = () => location.origin + location.pathname;
   const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
   const isConversation = () => /^\/c\/[a-zA-Z0-9-]{8,100}$/.test(location.pathname);
-  const composer = () => document.querySelector('#prompt-textarea[contenteditable="true"], textarea#prompt-textarea, [data-testid="composer"] [contenteditable="true"]');
+  const composer = () => [...document.querySelectorAll('#prompt-textarea[contenteditable="true"], textarea#prompt-textarea, [data-testid="composer"] [contenteditable="true"], .ProseMirror[contenteditable="true"]')]
+    .filter(editor => {
+      const style = getComputedStyle(editor);
+      return editor.isConnected && !editor.disabled && !editor.readOnly &&
+        !editor.closest('[hidden], [inert], [aria-hidden="true"]') &&
+        style.display !== 'none' && style.visibility === 'visible' &&
+        [...editor.getClientRects()].some(rect => rect.width > 0 && rect.height > 0);
+    }).sort((a, b) => Number(b.isContentEditable) - Number(a.isContentEditable))[0];
 
   function notice(text, canRetry = false) {
     if (!panel) {
       panel = document.createElement('div');
       panel.id = 'paperquick-chat-status';
-      const shadow = panel.attachShadow({mode: 'closed'});
+      const shadow = panel.attachShadow({mode: 'open'});
       const box = document.createElement('div');
       box.style.cssText = 'position:fixed;right:20px;top:20px;z-index:2147483647;max-width:380px;padding:14px 18px;border:1px solid #a7c7e8;border-radius:12px;background:#f4f9ff;color:#163758;font:14px/1.6 system-ui;box-shadow:0 6px 28px #0002';
       status = document.createElement('div');
       retry = document.createElement('button'); retry.textContent = '重试准备选区';
-      retry.onclick = () => { if (current?.prepared) saveBinding(); else if (current) deliver(current.descriptor); };
       const close = document.createElement('button'); close.textContent = '收起';
       close.onclick = () => { panel.hidden = true; };
       for (const button of [retry, close]) button.style.cssText = 'margin:8px 8px 0 0;padding:4px 10px;cursor:pointer';
       box.append(status, retry, close); shadow.append(box); document.documentElement.append(panel);
     }
     panel.hidden = false; status.textContent = '文献直达 · ' + text; retry.hidden = !canRetry;
+    retry.onclick = typeof canRetry === 'function' ? canRetry : () => current && deliver(current.descriptor);
   }
 
   async function rpc(type, extra = {}) {
@@ -53,7 +60,12 @@
     if (editor.tagName === 'TEXTAREA') {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(editor, text);
     } else {
-      // Plain DOM text, never HTML from a paper. Works with the ProseMirror editor.
+      // Use the browser's editing transaction so rich-text state observes the input.
+      // This acts only inside this webpage; it uses no keyboard or clipboard APIs.
+      const selection = document.getSelection(), range = document.createRange();
+      range.selectNodeContents(editor); selection.removeAllRanges(); selection.addRange(range);
+      if (document.execCommand('insertText', false, text) && draftText(editor)) return;
+      // Fallback for browsers without the editing command. Always insert plain text.
       editor.replaceChildren(...text.split('\n').map(line => {
         const p = document.createElement('p'); p.textContent = line;
         if (!line) p.append(document.createElement('br'));
@@ -61,6 +73,37 @@
       }));
     }
     editor.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: text}));
+  }
+
+  async function stageText(payload) {
+    // Hydration can replace an editor after a successful-looking DOM mutation.
+    // Require a live, visible editor with stable text before acknowledging delivery.
+    let stable = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const editor = await waitFor(composer);
+      if (!draftText(editor)) {
+        fillDraft(editor, payload.prompt);
+        if (draftText(editor) && normalize(draftText(editor)) !== normalize(payload.prompt))
+          throw new Error('网页未完整保留选中文字，请核对输入框后重试。');
+      }
+      else if (!current.textFilled || (editor !== current.editor && normalize(draftText(editor)) !== current.lastDraft))
+        throw new Error('对话框已有未发送文字，请先发送或清空，再点“重试准备选区”。');
+      const expected = normalize(draftText(editor));
+      if (!expected) continue;
+      current.editor = editor; current.textFilled = true; current.lastDraft = expected;
+      stable = editor;
+      for (let n = 0; n < 8; n++) {
+        await sleep(150);
+        if (composer() !== editor || !draftText(editor)) { stable = null; break; }
+      }
+      if (stable) return stable;
+    }
+    throw new Error('网页尚未保留选中文字，请等待输入框加载完成后重试。');
+  }
+
+  function forgetCurrent() {
+    current?.editor?.removeEventListener('input', current.trackDraft);
+    current = null; clearInterval(watch); watch = null;
   }
 
   function composerArea(editor) { return editor.closest('form') || editor.parentElement?.parentElement; }
@@ -148,11 +191,12 @@
     const sentText = normalize(sentTurn.innerText || sentTurn.textContent);
     if (!sentText.includes(current.lastDraft)) return;
     const primary = current.payload.files.find(file => file.primary);
+    const pending = current;
     binding = true;
     try {
       await rpc('Bind', {descriptor: current.descriptor, primaryAttached: !!(primary && current.primaryAttached && sentText.includes(primary.name))});
-      current.editor?.removeEventListener('input', current.trackDraft);
-      current = null;
+      if (current !== pending) return;
+      forgetCurrent();
       notice('对话已与这篇文献绑定，下次选区将继续此对话。');
       clearInterval(watch); watch = null;
     } catch (error) { clearInterval(watch); watch = null;await report('error',error.message);notice('对话绑定未完成：' + error.message, true); }
@@ -160,14 +204,18 @@
   }
 
   async function deliver(request, suppliedPayload) {
-    if (busy) throw new Error('当前选区仍在准备，请稍后再试。');
-    if (current?.prepared) {
-      await saveBinding();
-      if (current?.prepared && request !== current.descriptor) throw new Error('上一选区尚未发送，请先发送或完成当前操作。');
-    }
-    const retrying=current?.descriptor===request;
-    if(!retrying)current?.editor?.removeEventListener('input',current.trackDraft);
+    if (busy || binding) return {ok: false, error: '当前选区仍在准备，请稍后点击重试。'};
     busy = true;
+    try {
+      await saveBinding();
+      if (current && request !== current.descriptor) {
+        const live = await waitFor(composer);
+        if (draftText(live)) throw new Error('原对话输入框有未发送文字，请发送或清空后点击重试。');
+        // A cleared/remounted input is not an unsent draft, whatever the old flag says.
+        forgetCurrent();
+      }
+    } catch (error) { busy = false; return {ok: false, error: error.message}; }
+    const retrying=current?.descriptor===request;
     current = retrying?{...current,prepared:false}:{descriptor: request, prepared: false};
     try {
       const payload = suppliedPayload || (await rpc('Payload', {descriptor: request})).payload;
@@ -176,23 +224,15 @@
       if (route() !== expected) throw new Error('当前页面已切换，请回阅读页重新打开选区。');
       notice('正在准备选区和文献附件，请保持软件运行。');
       await report('waiting-composer');
-      let editor = await waitFor(composer);
-      await sleep(250);
-      editor=composer()||editor;
       current.previousMessage = [...document.querySelectorAll('[data-message-author-role="user"]')].at(-1);
-      if(!current.textFilled||!draftText(editor)){
-        if(draftText(editor))throw new Error('对话框已有未发送文字，请先发送或清空，再点“重试准备选区”。');
-        fillDraft(editor,payload.prompt);
-        await sleep(150);
-        if(!editor.isConnected||composer()!==editor||normalize(draftText(editor))!==normalize(payload.prompt))throw new Error('网页尚未保留选中文字，请等待输入框加载完成后重试。');
-        current.textFilled=true;
-      }
+      const previousEditor = current.editor, previousTracker = current.trackDraft;
+      let editor = await stageText(payload);
       await report('text-ready');
       current.lastDraft = normalize(draftText(editor));
-      if(current.editor&&current.editor!==editor){current.editor.removeEventListener('input',current.trackDraft);current.trackDraft=null;}
+      if(previousEditor&&previousEditor!==editor){previousEditor.removeEventListener('input',previousTracker);current.trackDraft=null;}
       current.editor = editor;
       if(!current.trackDraft){
-        current.trackDraft = () => { const text = normalize(draftText(editor)); if(current&&text)current.lastDraft=text; };
+        current.trackDraft = () => { if(current?.editor){const text = normalize(draftText(current.editor));if(text)current.lastDraft=text;} };
         editor.addEventListener('input', current.trackDraft);
       }
       try{
@@ -202,42 +242,46 @@
         current.prepared=false;
         await report('upload-error',error.message);
         notice('选中文字已填入；附件未完成：'+error.message,true);
-        return;
+        return {ok: false, error: error.message, reported: true};
       }
+      if (composer() !== editor || !draftText(editor)) editor = await stageText(payload);
       current.primaryAttached = payload.files.some(file => file.primary && attachmentPresent(editor, file.name));
       current.prepared = true;
       await report('ready');
       notice('已填入选区并准备附件，请核对上传状态后点击发送。');
       clearInterval(watch); watch = setInterval(saveBinding, 1500);
-    } catch (error) { await report('error',error.message);notice(error.message, true); }
+      return {ok: true};
+    } catch (error) { await report('error',error.message);notice(error.message, true);return {ok: false, error: error.message, reported: true}; }
     finally { busy = false; }
   }
 
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id || message?.type !== 'paperQuickChatDeliver') return false;
-    (async () => {
-      if (current?.prepared) await saveBinding();
-      if (busy || current?.prepared) throw new Error('原对话尚有未发送选区，请先完成后再重试。');
-      deliver(message.descriptor);
-      return {ok: true};
-    })().then(respond, error => respond({ok: false, error: error.message}));
+    deliver(message.descriptor).then(respond, error => respond({ok: false, error: error.message}));
     return true;
   });
 
-  async function begin() {
-    const value = /^#paperquick=(\d{1,5}\.[A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1]||(!current?initialDescriptor:'');
+  let initialConsumed = false;
+  async function begin(forced) {
+    const value = typeof forced === 'string' ? forced :
+      /^#paperquick=(\d{1,5}\.[A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1]||(!initialConsumed?initialDescriptor:'');
+    initialConsumed = true;
     try {
       if (value) {
         const result = await rpc('Route', {descriptor: value});
         if (!result.redirected) {
           history.replaceState(history.state, '', location.pathname + location.search);
-          await deliver(value, result.payload);
+          const accepted = await deliver(value, result.payload);
+          if (!accepted.ok && !accepted.reported) throw new Error(accepted.error);
         }
       } else if (!current) {
         const result = await rpc('Resume');
         if (result.descriptor) await deliver(result.descriptor);
       }
-    } catch (error) { current = value ? {descriptor: value} : null; notice(error.message, !!value); }
+    } catch (error) {
+      if(value)try{await rpc('Status',{descriptor:value,state:'error',detail:error.message});}catch(_){}
+      notice(error.message, value ? () => begin(value) : false);
+    }
   }
   addEventListener('hashchange', begin);
   begin();

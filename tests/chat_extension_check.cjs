@@ -15,6 +15,8 @@ async function contentFixture({draft = '', drop = false, editable = false, files
     set textContent(value) { this._text = value; this.children = []; }
     get textContent() { return this._text + this.children.map(child => child.textContent || '').join('\n'); }
     get innerText() { return this.textContent; }
+    getClientRects() { return [{width: 300, height: 40}]; }
+    get isContentEditable() { return this.tagName === 'DIV'; }
     append(...nodes) { this.children.push(...nodes); }
     replaceChildren(...nodes) { this._text = ''; this.children = nodes; }
     attachShadow() { return new Element('shadow'); }
@@ -52,7 +54,8 @@ async function contentFixture({draft = '', drop = false, editable = false, files
     documentElement: new Element('html'),
     createElement: tag => new Element(tag),
     querySelector: selector => selector.includes('input[type=') ? (drop ? null : input) : selector.includes('prompt-textarea') ? editor : null,
-    querySelectorAll: selector => selector.includes('data-message-author-role') ? messages : []
+    querySelectorAll: selector => selector.includes('data-message-author-role') ? messages : selector.includes('prompt-textarea') ? [editor] : selector.includes('input[type=') ? (drop ? [] : [input]) : [],
+    getSelection: () => ({removeAllRanges(){},addRange(){}}),createRange: () => ({selectNodeContents(){}}),execCommand: () => false
   };
   const chrome = {runtime: {
     id: 'fixture', onMessage: {addListener: callback => listeners.push(callback)},
@@ -70,7 +73,7 @@ async function contentFixture({draft = '', drop = false, editable = false, files
     atob: value => Buffer.from(value, 'base64').toString('binary'), Uint8Array,
     setTimeout: callback => { queueMicrotask(callback); }, setInterval: callback => { intervals.push(callback); return callback; },
     clearInterval: callback => { const index = intervals.indexOf(callback); if (index >= 0) intervals.splice(index, 1); },
-    addEventListener: () => {}, console});
+    getComputedStyle: () => ({display:'block',visibility:'visible'}),addEventListener: () => {}, console});
   vm.runInContext(fs.readFileSync(path.join(base, 'browser-extension/chat-content.js'), 'utf8'), context);
   await flush();
   return {editor, input, chips, sent, messages, intervals, listeners, payload, location, Element, elements};

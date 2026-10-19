@@ -63,6 +63,7 @@ class ReaderPage(ReaderWorkflow):
         toolbar.add('bookmark','添加书签',self.add_bookmark)
         toolbar.add('continuous','连续阅读 / 单页阅读',self.toggle_continuous,variable=self.continuous)
         toolbar.add('camera','截图到笔记',self.screenshot_tool)
+        toolbar.add('image','框选图片供 ChatGPT 讨论',self.chat_image_tool)
         toolbar.add('document','返回分页阅读',self.show_paged_view)
         toolbar.add('references','嵌入参考文献',self.dock_references)
         toolbar.add_page(self.page_input,self.jump,self.page_label)
@@ -299,14 +300,15 @@ class ReaderPage(ReaderWorkflow):
 
     def reading_context(self,event):
         if not self.rid or not self.context_location(event):return
+        self.cancel_box_selection()
         try:self.reading_menu.tk_popup(event.x_root,event.y_root)
         finally:self.reading_menu.grab_release()
 
     def context_note(self):
         if not self.rid:return
         self.new_paragraph();index=self.notes.index('end-1c');page=getattr(self,'context_page',self.page);self.notes.insert('end',f'[第 {page+1} 页]\n')
-        item=getattr(self,'last_selection',None)
-        if item and item['page']==self.page and item.get('quote'):self.notes.insert('end',item['quote']+'\n\n我的笔记：')
+        item=self.current_selection()
+        if item and item.get('quote'):self.notes.insert('end',item['quote']+'\n\n我的笔记：')
         self.notes.mark_set('insert','end-1c');self.notes.see('end');self.notes.focus_set();self.notes_changed()
         self.add_point_marker('笔记','阅读笔记',note_index=index)
 
@@ -355,27 +357,50 @@ class ReaderPage(ReaderWorkflow):
 
     def begin_selection(self,event):
         if self.loading or not self.image_size:return
+        self.selection_start=None;self.canvas.delete('rubber-band')
         if self.tool.get() in ('浏览','选择文字'):self.document_canvas.begin(event);return
         if self.tool.get()=='拖动阅读':self.canvas.scan_mark(event.x,event.y);return
         x=self.canvas.canvasx(event.x);y=self.canvas.canvasy(event.y)
         self.selection_page=self.document_canvas.page_at(x,y)
         if self.selection_page not in self.document_canvas.layout:return
+        left,top,w,h=self.document_canvas.layout[self.selection_page]
+        if not (left<=x<=left+w and top<=y<=top+h):return
+        if self.selection_page not in self.document_canvas.cache:
+            self.status.set('这一页仍在准备，请稍后框选。');return
+        self.document_canvas.selection=None;self.document_canvas.selection_text={};self.document_canvas.selecting=False;self.canvas.delete('selection')
         self.selection_start=(x,y)
 
     def move_selection(self,event):
         if self.tool.get() in ('浏览','选择文字'):self.document_canvas.move(event);return
         if self.tool.get()=='拖动阅读':self.canvas.scan_dragto(event.x,event.y,gain=1);return
         if not self.selection_start:return
-        self.canvas.delete('selection');self.canvas.create_rectangle(*self.selection_start,self.canvas.canvasx(event.x),self.canvas.canvasy(event.y),outline=self.colors[self.annotation_color.get()],width=2,dash=(5,3),tags='selection')
+        box=self.document_canvas.box_selection(self.canvas.canvasx(event.x),self.canvas.canvasy(event.y))
+        self.canvas.delete('rubber-band')
+        if box:self.canvas.create_rectangle(*box,outline='#2389e8',width=2,fill='#74b9ff',stipple='gray12',tags='rubber-band')
 
     def end_selection(self,event):
         if self.tool.get() in ('浏览','选择文字'):self.document_canvas.finish(event);return
         if not self.selection_start:return
-        x1,y1=self.selection_start;x2=self.canvas.canvasx(event.x);y2=self.canvas.canvasy(event.y);self.selection_start=None;self.canvas.delete('selection')
-        if min(abs(x2-x1),abs(y2-y1))<4:return
+        box=self.document_canvas.box_selection(self.canvas.canvasx(event.x),self.canvas.canvasy(event.y));self.selection_start=None;self.canvas.delete('rubber-band')
+        if not box:return
+        x1,y1,x2,y2=box
+        if min(x2-x1,y2-y1)<4:return
         left,top,w,h=self.document_canvas.layout[self.selection_page]
         rect=[max(0,min(1,(min(x1,x2)-left)/w)),max(0,min(1,(min(y1,y2)-top)/h)),max(0,min(1,(max(x1,x2)-left)/w)),max(0,min(1,(max(y1,y2)-top)/h))]
         item={'id':uuid.uuid4().hex,'attachment':self.attachment_id,'page':self.selection_page,'rect':rect,'color':self.colors[self.annotation_color.get()],'kind':self.tool.get(),'text':'','quote':'','created':time.time()}
+        if item['kind'] in ('截图到笔记','框选图片'):
+            self.last_selection=item;self.context_page=item['page']
+            try:
+                if item['kind']=='截图到笔记':
+                    image=self.document_canvas.screenshot(item['page'],rect)
+                    self.insert_note_image(image);self.add_point_marker('笔记','阅读截图',page=item['page'],point=rect[:2])
+                    self.status.set('选框图片已保存到笔记。')
+                else:
+                    self.canvas.create_rectangle(*box,outline='#2389e8',width=2,tags='selection')
+                    self.status.set('图片已框选；右键“用 ChatGPT 讨论选框图片”。')
+            except (ValueError,OSError) as exc:self.status.set(str(exc))
+            finally:self.tool.set('选择文字')
+            return
         path=self.path;generation=self.generation
         def job():
             try:item['quote']=region_text(path,item['page'],rect)
@@ -592,6 +617,7 @@ class ReaderPage(ReaderWorkflow):
     def close(self):
         if not self.can_close():return False
         self.save_notes();self.closed=True;self.generation+=1
+        if getattr(self,'_chat_bridge',None):self._chat_bridge.close();self._chat_bridge=None
         for window in (self.attachment_manager,self.conversion_window):
             if window and not window.closed:window.close()
         if self.comparison:self.comparison.close();self.comparison=None

@@ -1,27 +1,28 @@
 """Virtual continuous pages with a real PDF text-selection layer."""
 import bisect
 import threading
-from PIL import ImageTk
+from PIL import Image,ImageTk
 from pdf_reader_core import render_page_data,math_sqrt_limit
 
 
 class DocumentCanvas:
     def __init__(self,reader):
-        self.r=reader;self.canvas=reader.canvas;self.cache={};self.photos={};self.pending=set();self.layout={};self.tops=[];self.sign=None;self.job=None;self.selection=None
+        self.r=reader;self.canvas=reader.canvas;self.cache={};self.photos={};self.pending=set();self.layout={};self.tops=[];self.sign=None;self.job=None;self.selection=None;self.selection_text={};self.selecting=False
         self.canvas.bind('<Control-c>',lambda e:self.copy());self.canvas.bind('<Control-C>',lambda e:self.copy())
         self.canvas.bind('<Button-2>',lambda e:self.canvas.scan_mark(e.x,e.y));self.canvas.bind('<B2-Motion>',lambda e:self.canvas.scan_dragto(e.x,e.y,gain=1))
 
     def reset(self):
+        self.r.selection_start=None
         if self.job:
             try:self.canvas.after_cancel(self.job)
             except Exception:pass
-        self.job=None;self.cache={};self.photos={};self.pending=set();self.layout={};self.tops=[];self.sign=None;self.selection=None;self.canvas.delete('all')
+        self.job=None;self.cache={};self.photos={};self.pending=set();self.layout={};self.tops=[];self.sign=None;self.selection=None;self.selection_text={};self.selecting=False;self.canvas.delete('all')
 
     def adopt(self,path,page,count,image,chars,sizes):
         sign=(str(path),self.r.scale,self.r.generation,self.r.continuous.get())
         changed=sign!=self.sign;self.sign=sign
         if changed:
-            self.cache={};self.photos={};self.pending=set();self.selection=None;self.layout={};self.tops=[];self.canvas.delete('all')
+            self.cache={};self.photos={};self.pending=set();self.selection=None;self.selection_text={};self.selecting=False;self.r.last_selection=None;self.r.selection_start=None;self.layout={};self.tops=[];self.canvas.delete('all')
             y=18
             pages=range(count) if self.r.continuous.get() else [page]
             for n in pages:
@@ -40,6 +41,7 @@ class DocumentCanvas:
     def receive(self,page,image,chars):
         if page not in self.layout:return
         self.pending.discard(page);self.cache[page]=(image,chars);self.photos[page]=ImageTk.PhotoImage(image,master=self.r.frame)
+        if self.selecting:self.selection_text[page]=chars
         self.canvas.delete('image-'+str(page));x,y,w,h=self.layout[page]
         self.canvas.create_image(x,y,image=self.photos[page],anchor='nw',tags=('page-image','image-'+str(page)))
         self.r.photo=self.photos.get(self.r.page,self.photos[page]);self.r.draw_annotations()
@@ -68,6 +70,7 @@ class DocumentCanvas:
             threading.Thread(target=job,daemon=True).start()
         # Keep only visible pages and nearby pages; a long thesis stays bounded.
         keep=set(visible)|{self.r.page}
+        if getattr(self.r,'selection_start',None):keep.add(self.r.selection_page)
         for n in list(self.cache):
             if n not in keep:
                 self.canvas.delete('image-'+str(n));self.cache.pop(n,None);self.photos.pop(n,None)
@@ -108,20 +111,26 @@ class DocumentCanvas:
 
     def begin(self,event):
         self.canvas.focus_set();point=self.nearest(event)
+        self.r.last_selection=None;self.selection_text={n:data[1] for n,data in self.cache.items()};self.selecting=bool(point)
         if point:self.selection=(point,point);self.paint_selection()
         else:self.selection=None;self.canvas.delete('selection');self.r.status.set('这一页尚无可选文字；扫描页可使用截图或框选批注。')
 
     def move(self,event):
         if not self.selection:return
+        if self.selecting:self.selection_text.update({n:data[1] for n,data in self.cache.items()})
         point=self.nearest(event)
         if point:self.selection=(self.selection[0],point);self.paint_selection()
 
-    def selected(self):
+    def selected(self,complete=False):
         if not self.selection:return []
         (a,ia),(b,ib)=sorted(self.selection);result=[]
         for n in range(a,b+1):
-            if n not in self.cache:continue
-            chars=self.cache[n][1];result.append((n,chars[ia if n==a else 0:ib+1 if n==b else len(chars)]))
+            chars=self.selection_text.get(n)
+            if chars is None and n in self.cache:chars=self.cache[n][1]
+            if chars is None and complete:
+                _,chars=render_page_data(self.r.path,n,min(self.r.scale,1.2));self.selection_text[n]=chars
+            if chars is None:continue
+            result.append((n,chars[ia if n==a else 0:ib+1 if n==b else len(chars)]))
         return result
 
     def paint_selection(self):
@@ -136,12 +145,19 @@ class DocumentCanvas:
             for box in boxes:self.canvas.create_rectangle(*self.coords(page,box),fill='#74b9ff',stipple='gray50',outline='',tags='selection')
 
     def finish(self,event):
-        self.move(event);groups=self.selected()
+        self.move(event);self.selecting=False
+        try:groups=self.selected(complete=True)
+        except Exception as exc:self.r.status.set('跨页选区未完成：'+str(exc));return
         if not groups:return
-        quote='\n'.join(''.join(c['text'] for c in chars) for _,chars in groups).strip();page,chars=groups[0];boxes=[c['rect'] for c in chars if c['text'].strip()]
-        if not boxes:return
-        rect=[min(c[0] for c in boxes),min(c[1] for c in boxes),max(c[2] for c in boxes),max(c[3] for c in boxes)]
-        self.r.last_selection={'page':page,'attachment':self.r.attachment_id,'rect':rect,'quote':quote,'kind':'选择文字'}
+        quote='\n'.join(''.join(c['text'] for c in chars) for _,chars in groups).strip();regions=[]
+        for page,chars in groups:
+            boxes=[c['rect'] for c in chars if c['text'].strip() and c['rect'][2]>c['rect'][0] and c['rect'][3]>c['rect'][1]]
+            if boxes:regions.append({'page':page,'rect':[min(c[0] for c in boxes),min(c[1] for c in boxes),max(c[2] for c in boxes),max(c[3] for c in boxes)]})
+        if not regions:return
+        page,rect=regions[0]['page'],regions[0]['rect']
+        self.selection_text={n:chars for n,chars in self.selection_text.items() if groups[0][0]<=n<=groups[-1][0]}
+        self.r.last_selection={'page':page,'attachment':self.r.attachment_id,'rect':rect,'regions':regions,'quote':quote,'kind':'选择文字'}
+        self.r.context_page=page
         self.r.status.set('文字已选中：Ctrl+C 复制，右键可记笔记、添加链接或关联文献。')
 
     def copy(self):
@@ -150,6 +166,39 @@ class DocumentCanvas:
         return 'break'
 
     def screenshot(self,page,rect):
-        if page not in self.cache:raise ValueError('这一页仍在准备，请稍后重试。')
-        image=self.cache[page][0];w,h=image.size
-        return image.crop((round(rect[0]*w),round(rect[1]*h),round(rect[2]*w),round(rect[3]*h)))
+        if page in self.cache:image=self.cache[page][0]
+        elif self.r.path:image,_=render_page_data(self.r.path,page,self.r.scale)
+        else:raise ValueError('这一页仍在准备，请稍后重试。')
+        w,h=image.size
+        box=(max(0,round(rect[0]*w)),max(0,round(rect[1]*h)),min(w,round(rect[2]*w)),min(h,round(rect[3]*h)))
+        if box[2]<=box[0] or box[3]<=box[1]:raise ValueError('请在文档页面内框选有效区域。')
+        return image.crop(box)
+
+    def selection_image(self,item):
+        regions=item.get('regions') or [{'page':item['page'],'rect':item['rect']}]
+        # Estimate before rendering/cropping to keep a large multi-page selection bounded.
+        dimensions=[]
+        for region in regions:
+            page=region['page'];rect=region['rect']
+            if page not in self.layout:raise ValueError('选区页面已改变，请重新选择文字。')
+            w,h=self.cache[page][0].size if page in self.cache else self.layout[page][2:]
+            dimensions.append((max(1,round(rect[2]*w)-round(rect[0]*w)),max(1,round(rect[3]*h)-round(rect[1]*h))))
+        width=max(w for w,h in dimensions);height=sum(h for w,h in dimensions)+16*(len(regions)-1)
+        factor=min(1,(24000000/max(1,width*height))**.5)
+        if len(regions)==1:return self.screenshot(regions[0]['page'],regions[0]['rect'])
+        sizes=[(max(1,int(w*factor)),max(1,int(h*factor))) for w,h in dimensions];gap=max(1,int(16*factor))
+        result=Image.new('RGB',(max(w for w,h in sizes),sum(h for w,h in sizes)+gap*(len(sizes)-1)),'white');y=0
+        for region,size in zip(regions,sizes):
+            crop=self.screenshot(region['page'],region['rect']).convert('RGB')
+            if crop.size!=size:crop=crop.resize(size)
+            result.paste(crop,(0,y));y+=crop.height+gap
+        return result
+
+    def box_selection(self,x,y):
+        """Clamp a drag to the page where it started, regardless of drag direction."""
+        if not self.r.selection_start:return None
+        page=self.r.selection_page
+        if page not in self.layout:return None
+        left,top,w,h=self.layout[page];x0,y0=self.r.selection_start
+        x=max(left,min(left+w,x));y=max(top,min(top+h,y))
+        return [min(x0,x),min(y0,y),max(x0,x),max(y0,y)]

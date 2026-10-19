@@ -30,7 +30,14 @@ class ReaderWorkflow:
         self.document_canvas=DocumentCanvas(self);self.canvas.configure(yscrollcommand=self.document_canvas.scrolled)
         self.splitter.bind('<ButtonRelease-1>',lambda e:self.frame.after(120,self.fit_width))
         self.reading_menu.add_separator()
+        self.reading_menu.add_command(label='用 ChatGPT 讨论选中文字',command=self.chat_selected_text)
+        self.reading_menu.add_command(label='用 ChatGPT 讨论选框图片',command=self.chat_selected_image)
+        self.reading_menu.add_command(label='框选图片供 ChatGPT 讨论',command=self.chat_image_tool)
+        self.reading_menu.add_command(label='重新绑定这篇文献的 ChatGPT 对话',command=self.reset_chat)
+        self.reading_menu.add_separator()
         for label,command in [('复制选中文字',self.copy_selected),('插入选区截图到笔记',self.selection_screenshot),('关联已收集文献…',self.link_collected),('在此处添加超链接…',self.add_hyperlink),('在顶部显示参考文献',self.dock_references),('修改 Word 原文',self.edit_document)]:self.reading_menu.add_command(label=label,command=command)
+        self.canvas.bind('<Escape>',lambda _:(self.cancel_box_selection(),self.tool.set('选择文字'),'break')[-1])
+        self.tool.trace_add('write',lambda *_:self.selection_tool_changed())
         self.notes.bind('<Control-v>',self.paste_note_image);self.notes.bind('<Control-V>',self.paste_note_image)
         self.frame.bind('<Control-s>',lambda e:self.save_document() if self.word_editing else self.save_key())
         self.focus_bar=ttk.Frame(self.frame,padding=(12,5))
@@ -69,7 +76,10 @@ class ReaderWorkflow:
             try:
                 with Image.open(path) as source:image=source.copy()
             except OSError as exc:messagebox.showerror('图片未打开',str(exc),parent=self.frame);return
-        image.thumbnail((2400,2400));image=image.convert('RGB')
+        image=image.copy()
+        factor=min(1,2400/image.width,(24000000/(image.width*image.height))**.5)
+        if factor<1:image=image.resize((max(1,round(image.width*factor)),max(1,round(image.height*factor))))
+        image=image.convert('RGB')
         aid='note-image-'+uuid.uuid4().hex;relative=Path('note-assets')/self.rid/(aid+'.png');path=self.directory/relative;path.parent.mkdir(parents=True,exist_ok=True);image.save(path)
         thumb=image.copy();thumb.thumbnail((390,280));photo=ImageTk.PhotoImage(thumb,master=self.frame)
         self.show_notes();self.notebook.select(self.note_tab);self.notes.insert('insert','\n');self.notes.image_create('insert',image=photo,name=aid);self.notes.insert('insert','\n')
@@ -86,16 +96,76 @@ class ReaderWorkflow:
         return None
 
     def screenshot_tool(self):
-        if not self.path:self.status.set('打开分页文档后，拖选需要截图的区域。');return
-        self.tool.set('截图到笔记');self.status.set('在阅读页上拖一个框，松开后插入到笔记。')
+        self.start_box_tool('截图到笔记','在文档页面内拖一个矩形框，松开后插入笔记；Esc 取消。')
+
+    def start_box_tool(self,tool,hint):
+        if not self.path or self.loading or (self.text_view and self.text_view.winfo_ismapped()):
+            self.status.set('请先打开 PDF / Word 分页阅读，再框选图片。');return
+        self.tool.set(tool);self.canvas.focus_set();self.status.set(hint)
+
+    def selection_tool_changed(self):
+        self.cancel_box_selection()
+        self.canvas.configure(cursor='crosshair' if self.tool.get() in ('截图到笔记','框选图片') else '')
+
+    def cancel_box_selection(self):
+        self.selection_start=None;self.canvas.delete('rubber-band')
+        if self.tool.get() in ('截图到笔记','框选图片'):
+            self.canvas.configure(cursor='crosshair')
+        return 'break'
+
+    def current_selection(self):
+        item=getattr(self,'last_selection',None)
+        if not item or item.get('attachment')!=getattr(self,'attachment_id',None):return None
+        pages={region['page'] for region in item.get('regions',[])} or {item.get('page')}
+        if getattr(self,'context_page',self.page) not in pages:return None
+        return item
 
     def selection_screenshot(self):
-        item=getattr(self,'last_selection',None)
-        if not item or not item.get('rect'):self.screenshot_tool();return
+        item=self.current_selection()
+        if not item or not item.get('rect') or not self.path:self.screenshot_tool();return
         try:
-            self.insert_note_image(self.document_canvas.screenshot(item['page'],item['rect']))
+            self.insert_note_image(self.document_canvas.selection_image(item))
             self.add_point_marker('笔记','阅读截图',page=item['page'],point=[item['rect'][0],item['rect'][1]])
         except Exception as exc:self.status.set(str(exc))
+
+    def chat_image_tool(self):
+        self.start_box_tool('框选图片','拖框选择文档中的图表；选好后右键“用 ChatGPT 讨论选框图片”；Esc 取消。')
+
+    def chat_selected_text(self):
+        if self.text_view and self.text_view.winfo_ismapped():
+            try:quote=self.text_view.get('sel.first','sel.last')
+            except tk.TclError:quote=''
+        else:
+            item=self.current_selection();quote=item.get('quote','') if item else ''
+        if not quote.strip():self.status.set('请先选中文字，再右键用 ChatGPT 讨论。');return
+        self.open_chat(quote=quote,page=(self.current_selection() or {}).get('page',self.page))
+
+    def chat_selected_image(self):
+        item=self.current_selection()
+        if not item or not self.path:self.chat_image_tool();return
+        try:image=self.document_canvas.selection_image(item)
+        except (ValueError,KeyError) as exc:self.status.set(str(exc));return
+        self.open_chat(image=image,page=item['page'])
+
+    def chat_bridge(self):
+        if not getattr(self,'_chat_bridge',None):
+            from chat_bridge import ChatBridge
+            self._chat_bridge=ChatBridge(self.directory)
+        return self._chat_bridge
+
+    def open_chat(self,quote='',image=None,page=0):
+        if not self.rid:return
+        import webbrowser
+        try:
+            url=self.chat_bridge().prepare(self.rid,quote=quote,image=image,page=page)
+            if not webbrowser.open(url):raise ValueError('默认浏览器未能打开。请检查浏览器设置。')
+            self.status.set('已打开 ChatGPT；需在该浏览器启用新版右键扩展。首次附上正文，检查后点击发送，同篇复用对话。')
+        except (ValueError,OSError) as exc:self.status.set('ChatGPT 未打开：'+str(exc))
+
+    def reset_chat(self):
+        if not self.rid:return
+        if messagebox.askyesno('重新绑定对话','下次讨论将新建对话并重新附上正文，原 ChatGPT 对话保留。继续？',parent=self.frame):
+            self.chat_bridge().reset(self.rid);self.status.set('已解除绑定，下次右键讨论将创建新对话。')
 
     def toggle_continuous(self):
         lib=Library(self.directory)
@@ -117,7 +187,7 @@ class ReaderWorkflow:
             index=self.text_view.index(f'@{event.x},{event.y}');self.context_text_index=index;self.context_page=0;self.context_point=[.05,.05]
             try:quote=self.text_view.get('sel.first','sel.last')
             except tk.TclError:quote=''
-            if quote:self.last_selection={'page':0,'quote':quote,'rect':[0,0,0,0],'kind':'选择文字','attachment':self.attachment_id}
+            self.last_selection={'page':0,'quote':quote,'rect':[0,0,0,0],'kind':'选择文字','attachment':self.attachment_id} if quote else None
         else:
             point=self.document_canvas.context(event)
             if not point:return False

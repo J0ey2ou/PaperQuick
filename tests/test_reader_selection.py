@@ -91,11 +91,14 @@ class ReaderSelectionTests(unittest.TestCase):
     def test_open_chat_uses_bridge_and_mocked_browser_only(self):
         r = self.reader
         bridge = Mock(); bridge.prepare.return_value = 'https://chatgpt.com/#paperquick=fixture'
+        bridge.prepare.return_value='https://chatgpt.com/#paperquick=54321.'+'a'*43
+        bridge.open_url.return_value='http://127.0.0.1:54321/handoff/'+'a'*43+'/open'
+        bridge.status.return_value={'state':'waiting-extension','detail':''}
         r._chat_bridge = bridge
         with patch('webbrowser.open', return_value=True) as browser:
             r.open_chat(quote='selected quotation', page=1)
         bridge.prepare.assert_called_once_with(self.rid, quote='selected quotation', image=None, page=1)
-        browser.assert_called_once_with(bridge.prepare.return_value)
+        browser.assert_called_once_with(bridge.open_url.return_value)
 
     def test_cross_page_text_selection_crops_both_pages_in_reading_order(self):
         r=self.reader;dc=r.document_canvas

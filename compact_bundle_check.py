@@ -45,6 +45,8 @@ def run(root,report):
                 url=bridge.prepare(chat_rid,quote='Selected fixture text')
                 token=url.split('#paperquick=')[1].split('.',1)[1]
                 assert len(bridge.payload(token)['files'])==1
+                assert bridge.open_url(url).startswith('http://127.0.0.1:')
+                assert b'paperquick-handoff' in bridge.connection_page(token)
             finally:bridge.close()
             from pypdf import PdfWriter
             from pypdf.generic import DecodedStreamObject,NameObject

@@ -1,5 +1,7 @@
 # 文献直达 · PaperQuick
 
+**v3.4.2 接入修复**：加入扩展连接检测，修复地址参数被清理、附件识别失败阻塞文字填入，以及单页跳转后对话绑定失败。首次在默认浏览器加载扩展后，连接页会自动继续。[接入说明](docs/chatgpt-reading.md)。
+
 **v3.4.1 预览**：新增 ChatGPT 阅读互动，修复矩形选框、跨页选词截图遗漏后续页面及长图保存。[下载 Windows 预览包](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.4.1/PaperQuick-v3.4.1-Windows.zip) · [预览版说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.4.1) · [ChatGPT 接入步骤](docs/chatgpt-reading.md)。网页自动上传仍需在真实账号环境验证。
 
 **v3.4.0 单行阅读工具与自动保存**：主阅读区、附件比对和笔记工具统一为单行图标，悬停查看说明；设置自动保存，新增版本与开发者项目入口。提供继承此前功能的完整包，升级时保留文献库和个人设置。见 [v3.4 升级说明](docs/v3.4-upgrade.md)。

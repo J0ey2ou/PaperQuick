@@ -19,7 +19,7 @@ ROOT_FILES = (
     '右键插件安装.html', '推送文案.html', '推送文案.txt', '推送文案.md',
 )
 EXTENSION_FILES = (
-    'app.ico', 'background.js', 'chat-background.js', 'chat-content.js', 'engine.js', 'icon128.png', 'icon16.png',
+    'app.ico', 'background.js', 'chat-background.js', 'chat-content.js', 'chat-launch.js', 'engine.js', 'icon128.png', 'icon16.png',
     'icon48.png', 'manifest.json', 'package.json', 'page-reader.js',
     'results.html', 'results.js', 'style.css',
 )

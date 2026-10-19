@@ -1,6 +1,7 @@
 """User-initiated ChatGPT handoffs. No browser, clipboard or service at import time."""
 import base64
 import io
+import html
 import json
 import re
 import secrets
@@ -86,7 +87,8 @@ class ChatBridge:
                     raise ValueError('待处理选区过多，请先完成已打开的 ChatGPT 对话。')
                 self.requests[token] = {'rid': rid, 'key': namespace + ':' + rid,
                                         'url': target, 'prompt': prompt, 'files': files,
-                                        'created': now, 'fingerprint': fingerprint}
+                                        'created': now, 'fingerprint': fingerprint,
+                                        'state': 'waiting-extension', 'detail': ''}
                 try:
                     self._start()
                 except Exception:
@@ -95,6 +97,47 @@ class ChatBridge:
                 return (target or 'https://chatgpt.com/') + f'#paperquick={self.server.server_port}.{token}'
             finally:
                 lib.close()
+
+    def open_url(self, chat_url):
+        """Start on a local connection page so a missing extension is visible."""
+        parsed=urlsplit(chat_url)
+        match=re.fullmatch(r'paperquick=(\d+)\.([A-Za-z0-9_-]{43})',parsed.fragment)
+        if not match or parsed.netloc!='chatgpt.com':raise ValueError('无效的 ChatGPT 选区地址。')
+        port,token=match.groups()
+        if not self.server or int(port)!=self.server.server_port:raise ValueError('本地连接已关闭，请重新打开选区。')
+        self._request(token)
+        return f'http://127.0.0.1:{port}/handoff/{token}/open'
+
+    def status(self, token):
+        with self.lock:
+            item=self._request(token)
+            return {'state':item.get('state','waiting-extension'),'detail':item.get('detail','')}
+
+    def update_status(self, token, state, detail=''):
+        allowed={'extension-connected','waiting-composer','text-ready','uploading','ready','upload-error','error','bound'}
+        if state not in allowed or not isinstance(detail,str) or len(detail)>600:raise ValueError('无效的连接状态。')
+        with self.lock:
+            item=self._request(token);item['state']=state;item['detail']=detail
+        return {'ok':True}
+
+    def connection_page(self,token):
+        with self.lock:
+            item=self._request(token)
+            target=(item['url'] or 'https://chatgpt.com/')+f'#paperquick={self.server.server_port}.{token}'
+            import sys
+            extension=(Path(sys.executable).parent if getattr(sys,'frozen',False) else Path(__file__).parent)/'browser-extension'
+            return ('''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="paperquick-handoff" content="1"><title>文献直达 · 连接 ChatGPT</title>
+<style>body{max-width:760px;margin:55px auto;padding:0 24px;color:#19314b;font:16px/1.7 system-ui;background:#f5f8fc}section{padding:22px;background:white;border:1px solid #d6e2ef;border-radius:12px;margin:18px 0}code{overflow-wrap:anywhere}textarea{box-sizing:border-box;width:100%;min-height:140px;padding:12px}a{color:#1767c5}</style>
+<h1>连接 ChatGPT</h1><section><p id="status">正在检测浏览器扩展；连接后自动进入 ChatGPT 并准备选区。</p>
+<div id="setup"><p>首次使用需要在当前浏览器加载文献直达扩展。仅打开 ChatGPT 网站不能让其他程序直接填写内容或附加文献。</p>
+<ol><li>在地址栏打开 <code>edge://extensions</code>（Chrome 使用 <code>chrome://extensions</code>）。</li>
+<li>开启开发人员模式，点击“加载解压缩的扩展”，选择下面的文件夹。</li>
+<li>如果已有旧扩展，先重新加载，并允许访问 ChatGPT 与本机地址；随后刷新本页。</li></ol>
+<p><code>'''+html.escape(str(extension))+'''</code></p></div></section>
+<section><p>本次选中文字已在本机准备好；扩展只会在这次主动操作后交给 ChatGPT。</p><textarea readonly>'''+html.escape(item['prompt'])+'''</textarea>
+<p><a href="'''+html.escape(target,quote=True)+'''">手动打开 ChatGPT</a> · 需要保持文献直达运行，连接 30 分钟内有效。</p></section>
+<script>setTimeout(()=>{document.querySelector('#status').textContent='尚未连接扩展，请完成下面的首次设置后刷新本页。'},7000);</script></html>''').encode('utf-8')
 
     def _request(self, token):
         item = self.requests.get(token)
@@ -157,6 +200,7 @@ class ChatBridge:
                 for pending in self.requests.values():
                     if pending['rid'] == item['rid']:pending['url'] = url
                 item['completed'] = True
+                item['state']='bound'
             finally:
                 lib.close()
             return {'ok': True}
@@ -181,12 +225,20 @@ class ChatBridge:
 
             def handle_request(self):
                 origin = self.headers.get('Origin', '')
+                opening=re.fullmatch(r'/handoff/([A-Za-z0-9_-]{43})/open',self.path)
+                if opening and self.command=='GET' and self.headers.get('Host')==f'127.0.0.1:{self.server.server_port}' and not origin:
+                    try:raw=bridge.connection_page(opening.group(1))
+                    except ValueError:self.send_error(410);return
+                    self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8')
+                    self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store')
+                    self.send_header('Content-Security-Policy',"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
+                    self.end_headers();self.wfile.write(raw);return
                 if (self.headers.get('Host') != f'127.0.0.1:{self.server.server_port}' or
                         self.headers.get('X-PaperQuick') != '1' or
                         (origin and not re.fullmatch(r'chrome-extension://[a-p]{32}', origin))):
                     self.send_error(403)
                     return
-                match = re.fullmatch(r'/handoff/([A-Za-z0-9_-]{43})(?:/file/(\d+)/(\d+)|/bind)?', self.path)
+                match = re.fullmatch(r'/handoff/([A-Za-z0-9_-]{43})(?:/file/(\d+)/(\d+)|/bind|/status)?', self.path)
                 if not match:
                     self.send_error(404)
                     return
@@ -194,6 +246,8 @@ class ChatBridge:
                 try:
                     if self.command == 'GET' and index is not None:
                         result = bridge.file_chunk(token, int(index), int(part))
+                    elif self.command=='GET' and self.path.endswith('/status'):
+                        result=bridge.status(token)
                     elif self.command == 'GET' and not self.path.endswith('/bind'):
                         result = bridge.payload(token)
                     elif self.command == 'POST' and self.path.endswith('/bind'):
@@ -202,6 +256,10 @@ class ChatBridge:
                             raise ValueError('无效请求。')
                         body = json.loads(self.rfile.read(length))
                         result = bridge.bind(token, body['url'], body.get('primaryAttached', False))
+                    elif self.command=='POST' and self.path.endswith('/status'):
+                        length=int(self.headers.get('Content-Length','0'))
+                        if not 0<length<=4096:raise ValueError('无效请求。')
+                        body=json.loads(self.rfile.read(length));result=bridge.update_status(token,body['state'],body.get('detail',''))
                     else:
                         raise ValueError('无效请求。')
                     status = 200

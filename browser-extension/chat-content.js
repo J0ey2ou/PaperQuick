@@ -1,5 +1,7 @@
 /* ChatGPT DOM adapter: stage drafts/files only. Never press Send or read cookies. */
 (() => {
+  // Capture before the site's startup scripts normalize history/hash routes.
+  const initialDescriptor=/^#paperquick=(\d{1,5}\.[A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1];
   let busy = false, current = null, panel, status, retry, watch, binding = false;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const route = () => location.origin + location.pathname;
@@ -31,6 +33,11 @@
     return result;
   }
 
+  async function report(state,detail='') {
+    if(!current)return;
+    try{await rpc('Status',{descriptor:current.descriptor,state,detail:detail.slice(0,600)});}catch(_){}
+  }
+
   async function waitFor(find, timeout = 30000) {
     const until = Date.now() + timeout;
     while (Date.now() < until) { const value = find(); if (value) return value; await sleep(250); }
@@ -57,17 +64,24 @@
   }
 
   function composerArea(editor) { return editor.closest('form') || editor.parentElement?.parentElement; }
-  function attachmentPresent(editor, name) {
+  function attachmentState(editor, name) {
     const area = composerArea(editor);
-    if (!area) return false;
+    if (!area) return '';
     // A filename in the draft itself is not evidence of an attachment.
-    return [...area.querySelectorAll('[data-testid*="attachment"], [data-testid*="file"], [aria-label], [title]')]
-      .some(node => !editor.contains(node) && !node.contains(editor) &&
-        [node.textContent, node.getAttribute('aria-label'), node.getAttribute('title')].some(text => text?.includes(name)));
+    const node=[...area.querySelectorAll('*')].reverse().find(node=>!editor.contains(node)&&!node.contains(editor)&&
+      ([name].some(value=>normalize(node.textContent)===value||normalize(node.textContent).startsWith(value+' '))||
+        [node.getAttribute('aria-label'),node.getAttribute('title')].some(text=>text?.includes(name))));
+    if(!node)return '';
+    const item=node.closest('[data-upload-state], [data-testid*="attachment"], [data-testid*="file"]')||node.parentElement||node;
+    const state=item.getAttribute('data-upload-state')||'';
+    if(state==='error'||/upload failed|couldn.t upload|上传失败|无法上传|上传出错/i.test(item.textContent))return 'error';
+    if(state==='uploading'||item.querySelector?.('[role="progressbar"], [aria-busy="true"]'))return 'uploading';
+    return 'ready';
   }
+  const attachmentPresent=(editor,name)=>['ready','uploading'].includes(attachmentState(editor,name));
 
   async function fileInput(editor) {
-    let input = document.querySelector('input[type="file"]:not([accept^="image/"])');
+    let input = document.querySelector('input[type="file"]');
     if (input) return input;
     const area = composerArea(editor);
     const add = area?.querySelector('[data-testid="composer-plus-btn"], button[aria-label*="Attach"], button[aria-label*="添加"], button[aria-label*="附件"]');
@@ -75,7 +89,7 @@
       add.click(); await sleep(200);
       const menu = [...document.querySelectorAll('[role="menuitem"]')].find(el => /upload|add photos|添加照片|上传文件|添加文件/i.test(el.textContent || ''));
       // Avoid opening the OS file picker: only use an input already mounted by the menu.
-      input = document.querySelector('input[type="file"]:not([accept^="image/"])');
+      input = document.querySelector('input[type="file"]');
       if (!input && menu) {
         throw new Error('网页未提供可自动附加的文件控件。请用网页附件菜单手动上传正文，再重试文字填入。');
       }
@@ -89,10 +103,6 @@
     if (!missing.length) return;
     let input;
     try { input = await fileInput(editor); } catch (_) { /* Use the web composer's drop handler below. */ }
-    // Some file inputs accept images only; do not silently feed a PDF into those.
-    if (input?.accept && !/pdf|document|\*|\.txt|\.docx/i.test(input.accept) && missing.some(file => file.primary)) {
-      throw new Error('当前附件控件仅支持图片，请展开可上传文档的附件入口后重试。');
-    }
     for (const file of missing) {
       const chunks = [];
       for (let part = 0; part < file.chunks; part++) {
@@ -100,9 +110,17 @@
         chunks.push(Uint8Array.from(atob(data), ch => ch.charCodeAt(0)));
       }
       const types = {pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain', md: 'text/markdown', png: 'image/png'};
+      const mime=types[file.name.split('.').pop().toLowerCase()]||'application/octet-stream';
+      // Re-query after every attachment: the app may replace the input element.
+      const inputs=[...document.querySelectorAll('input[type="file"]')];
+      input=inputs.find(node=>!node.accept||node.accept.split(',').some(rule=>{
+        rule=rule.trim().toLowerCase();return rule==='*/*'||rule===mime||file.name.toLowerCase().endsWith(rule)||
+          (rule.endsWith('/*')&&mime.startsWith(rule.slice(0,-1)));
+      }))||null;
       const transfer = new DataTransfer();
       transfer.items.add(new File(chunks, file.name, {type: types[file.name.split('.').pop().toLowerCase()] || 'application/octet-stream'}));
       if (input?.isConnected) {
+        input.value='';
         input.files = transfer.files;
         input.dispatchEvent(new Event('change', {bubbles: true}));
       } else {
@@ -110,7 +128,11 @@
         editor.dispatchEvent(new DragEvent('dragover', {bubbles: true, cancelable: true, dataTransfer: transfer}));
         editor.dispatchEvent(new DragEvent('drop', {bubbles: true, cancelable: true, dataTransfer: transfer}));
       }
-      await waitFor(() => attachmentPresent(editor, file.name), 12000);
+      await waitFor(()=>{
+        const state=attachmentState(editor,file.name);
+        if(state==='error')throw new Error('ChatGPT 未能上传“'+file.name+'”，选中文字已保留，可检查网络与附件额度后重试。');
+        return state==='ready';
+      },20000);
     }
   }
 
@@ -133,7 +155,7 @@
       current = null;
       notice('对话已与这篇文献绑定，下次选区将继续此对话。');
       clearInterval(watch); watch = null;
-    } catch (error) { clearInterval(watch); watch = null; notice('对话绑定未完成：' + error.message, true); }
+    } catch (error) { clearInterval(watch); watch = null;await report('error',error.message);notice('对话绑定未完成：' + error.message, true); }
     finally { binding = false; }
   }
 
@@ -143,28 +165,51 @@
       await saveBinding();
       if (current?.prepared && request !== current.descriptor) throw new Error('上一选区尚未发送，请先发送或完成当前操作。');
     }
+    const retrying=current?.descriptor===request;
+    if(!retrying)current?.editor?.removeEventListener('input',current.trackDraft);
     busy = true;
-    current = {descriptor: request, prepared: false};
+    current = retrying?{...current,prepared:false}:{descriptor: request, prepared: false};
     try {
       const payload = suppliedPayload || (await rpc('Payload', {descriptor: request})).payload;
       current.payload = payload;
       const expected = payload.url || 'https://chatgpt.com/';
       if (route() !== expected) throw new Error('当前页面已切换，请回阅读页重新打开选区。');
       notice('正在准备选区和文献附件，请保持软件运行。');
-      const editor = await waitFor(composer);
+      await report('waiting-composer');
+      let editor = await waitFor(composer);
+      await sleep(250);
+      editor=composer()||editor;
       current.previousMessage = [...document.querySelectorAll('[data-message-author-role="user"]')].at(-1);
-      if (draftText(editor)) throw new Error('对话框已有未发送文字，请先发送或清空，再点“重试准备选区”。');
-      await attach(editor, payload, request);
-      fillDraft(editor, payload.prompt);
-      current.lastDraft = normalize(payload.prompt);
+      if(!current.textFilled||!draftText(editor)){
+        if(draftText(editor))throw new Error('对话框已有未发送文字，请先发送或清空，再点“重试准备选区”。');
+        fillDraft(editor,payload.prompt);
+        await sleep(150);
+        if(!editor.isConnected||composer()!==editor||normalize(draftText(editor))!==normalize(payload.prompt))throw new Error('网页尚未保留选中文字，请等待输入框加载完成后重试。');
+        current.textFilled=true;
+      }
+      await report('text-ready');
+      current.lastDraft = normalize(draftText(editor));
+      if(current.editor&&current.editor!==editor){current.editor.removeEventListener('input',current.trackDraft);current.trackDraft=null;}
       current.editor = editor;
-      current.trackDraft = () => { const text = normalize(draftText(editor)); if (current?.prepared && text) current.lastDraft = text; };
-      editor.addEventListener('input', current.trackDraft);
+      if(!current.trackDraft){
+        current.trackDraft = () => { const text = normalize(draftText(editor)); if(current&&text)current.lastDraft=text; };
+        editor.addEventListener('input', current.trackDraft);
+      }
+      try{
+        if(payload.files.length)await report('uploading');
+        await attach(editor,payload,request);
+      }catch(error){
+        current.prepared=false;
+        await report('upload-error',error.message);
+        notice('选中文字已填入；附件未完成：'+error.message,true);
+        return;
+      }
       current.primaryAttached = payload.files.some(file => file.primary && attachmentPresent(editor, file.name));
       current.prepared = true;
+      await report('ready');
       notice('已填入选区并准备附件，请核对上传状态后点击发送。');
       clearInterval(watch); watch = setInterval(saveBinding, 1500);
-    } catch (error) { notice(error.message, true); }
+    } catch (error) { await report('error',error.message);notice(error.message, true); }
     finally { busy = false; }
   }
 
@@ -180,7 +225,7 @@
   });
 
   async function begin() {
-    const value = /^#paperquick=(\d{1,5}\.[A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1];
+    const value = /^#paperquick=(\d{1,5}\.[A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1]||(!current?initialDescriptor:'');
     try {
       if (value) {
         const result = await rpc('Route', {descriptor: value});

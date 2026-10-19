@@ -157,10 +157,28 @@ class ReaderWorkflow:
         if not self.rid:return
         import webbrowser
         try:
-            url=self.chat_bridge().prepare(self.rid,quote=quote,image=image,page=page)
-            if not webbrowser.open(url):raise ValueError('默认浏览器未能打开。请检查浏览器设置。')
-            self.status.set('已打开 ChatGPT；需在该浏览器启用新版右键扩展。首次附上正文，检查后点击发送，同篇复用对话。')
+            bridge=self.chat_bridge();url=bridge.prepare(self.rid,quote=quote,image=image,page=page)
+            if not webbrowser.open(bridge.open_url(url)):raise ValueError('默认浏览器未能打开。请检查浏览器设置。')
+            token=url.split('#paperquick=')[1].split('.',1)[1]
+            self._chat_monitor=token
+            self.status.set('正在检测浏览器扩展；连接后会填入选中文字，并准备正文附件。')
+            self.monitor_chat(token,self.rid,time.monotonic())
         except (ValueError,OSError) as exc:self.status.set('ChatGPT 未打开：'+str(exc))
+
+    def monitor_chat(self,token,rid,started,previous=''):
+        if self.closed or self.rid!=rid or getattr(self,'_chat_monitor',None)!=token:return
+        try:report=self.chat_bridge().status(token)
+        except ValueError:return
+        state=report['state'];detail=report.get('detail','')
+        labels={'extension-connected':'扩展已连接，正在进入 ChatGPT。','waiting-composer':'正在等待 ChatGPT 输入框；请先登录。',
+                'text-ready':'选中文字已填入 ChatGPT，正在准备文献附件。','uploading':'选中文字已填入，文献附件正在上传。',
+                'ready':'选中文字与附件已准备，请在 ChatGPT 检查后点击发送。','bound':'已绑定这篇文献的 ChatGPT 对话，后续选区继续此对话。',
+                'upload-error':'选中文字已填入，文献附件未完成：'+detail,'error':'ChatGPT 接入未完成：'+detail}
+        if state=='waiting-extension' and time.monotonic()-started>7:
+            state='extension-missing';labels[state]='尚未连接文献直达扩展。请按浏览器连接页的步骤加载新版扩展，再刷新连接页。'
+        if state!=previous and state in labels:self.status.set(labels[state])
+        if state in ('bound','ready','upload-error','error') or time.monotonic()-started>180:return
+        self.frame.after(1000,lambda:self.monitor_chat(token,rid,started,state))
 
     def reset_chat(self):
         if not self.rid:return

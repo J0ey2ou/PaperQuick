@@ -1,0 +1,133 @@
+// Actual MV3/content-script/HTTP integration in a disposable, strictly headless profile.
+// No desktop input, screenshots, clipboard, user browser profiles or live ChatGPT requests.
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const {spawn} = require('node:child_process');
+const readline = require('node:readline');
+const {chromium} = require('playwright');
+const root = path.resolve(__dirname, '..');
+const pending = [];
+const backend = spawn(process.env.PYTHON || 'python', ['-u', path.join(__dirname, 'chat_bridge_fixture.py')], {cwd:root,windowsHide:true,stdio:['pipe','pipe','pipe']});
+let backendError='';backend.stderr.on('data', data => {backendError+=data;});
+readline.createInterface({input:backend.stdout}).on('line', line => {const resolve=pending.shift();if(resolve)resolve(JSON.parse(line));});
+backend.on('exit', code => {if(code)console.error('Fixture backend exited:',code,backendError);});
+const issue = args => new Promise(resolve => {pending.push(resolve);backend.stdin.write(JSON.stringify(args)+'\n');});
+const waitState=async state=>{
+  const deadline=Date.now()+10000;
+  let last;
+  while(Date.now()<deadline){last=await issue({status:true});if(last.state===state)return;await new Promise(resolve=>setTimeout(resolve,200));}
+  throw new Error('Expected bridge state: '+state+'; actual: '+JSON.stringify(last));
+};
+const checks=[];
+let context;
+const mode=process.argv[2]||'baseline';
+
+function fixture({stripHash=false,plainChip=false,noInput=false,failUpload=false}={}) {
+  return `<!doctype html><meta charset="utf-8"><title>Isolated chat composer fixture</title>
+  ${stripHash?'<script>history.replaceState(null,"",location.pathname)</script>':''}
+  <main><form><div><div id="prompt-textarea" class="ProseMirror" contenteditable="true"><p><br></p></div></div>
+  <div id="attachments"></div><button type="button" data-testid="composer-plus-btn">Add</button></form>
+  ${noInput?'':'<input type="file" multiple accept="application/pdf,image/png" hidden>'}</main>
+  <script>
+  window.fixture={uploads:[],draft:'',sends:0};
+  const editor=document.querySelector('#prompt-textarea');
+  editor.addEventListener('input',()=>{window.fixture.draft=editor.innerText.trim()});
+  async function upload(files){for(const file of files){
+    const form=new FormData();form.append('file',file);
+    const chip=document.createElement('div');chip.className='fixture-attachment';
+    ${plainChip?'':"chip.setAttribute('data-testid','attachment');"}
+    chip.textContent=file.name;chip.dataset.uploadState='uploading';document.querySelector('#attachments').append(chip);
+    const response=await fetch('/paperquick-test-upload',{method:'POST',body:form});
+    if(!response.ok){chip.dataset.uploadState='error';chip.textContent+=' Upload failed';return}
+    window.fixture.uploads.push({name:file.name,size:file.size,sha:await crypto.subtle.digest('SHA-256',await file.arrayBuffer()).then(hash=>[...new Uint8Array(hash)].map(n=>n.toString(16).padStart(2,'0')).join(''))});
+    chip.dataset.uploadState='complete';
+  }}
+  document.querySelector('input[type=file]')?.addEventListener('change',event=>upload([...event.target.files]));
+  editor.addEventListener('dragover',event=>event.preventDefault());
+  editor.addEventListener('drop',event=>{event.preventDefault();upload([...event.dataTransfer.files])});
+  document.querySelector('form').addEventListener('submit',event=>{event.preventDefault();window.fixture.sends++});
+  window.sendFixture=()=>{
+    const turn=document.createElement('article');turn.setAttribute('data-testid','conversation-turn-1');
+    const message=document.createElement('div');message.setAttribute('data-message-author-role','user');message.textContent=editor.innerText;
+    turn.append(message,...document.querySelector('#attachments').children);document.querySelector('main').prepend(turn);
+    editor.replaceChildren();window.fixture.draft='';window.fixture.sends++;
+    history.pushState(null,'','/c/12345678-1234-1234-1234-123456789abc');
+  };
+  </script>`;
+}
+
+(async()=>{
+  const profiles=path.join(root,'build/chat-integration');fs.mkdirSync(profiles,{recursive:true});
+  const profile=fs.mkdtempSync(path.join(profiles,'profile-'));
+  const executable=process.env.CHAT_TEST_BROWSER || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+  const extensionArgs=mode==='no-extension'?[]:['--disable-extensions-except='+path.join(root,'browser-extension'),'--load-extension='+path.join(root,'browser-extension')];
+  context=await chromium.launchPersistentContext(profile,{executablePath:executable,headless:true,args:[
+    '--no-first-run','--no-default-browser-check',...extensionArgs],serviceWorkers:'allow'});
+  if(mode!=='no-extension'){
+    const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker',{timeout:15000});
+    assert(worker.url().startsWith('chrome-extension://'));
+  }
+  const errors=[];context.on('page',page=>page.on('pageerror',error=>errors.push(error.message)));
+  const uploads=[];
+  await context.route('**/*',async route=>{
+    const url=new URL(route.request().url());
+    if(url.hostname==='127.0.0.1'){await route.continue();return;}
+    if(url.origin!=='https://chatgpt.com'){await route.abort();return;}
+    if(new URL(route.request().url()).pathname==='/paperquick-test-upload'){
+      uploads.push(route.request().postDataBuffer());
+      await route.fulfill({status:mode==='upload-failure'?500:200,contentType:'application/json',body:'{}'});return;
+    }
+    await route.fulfill({contentType:'text/html',body:fixture({stripHash:mode==='stripped-hash',plainChip:mode==='plain-chip',noInput:mode==='drop',failUpload:mode==='upload-failure'})});
+  });
+  // Block all unrelated external requests; only fixture documents reach the bridge.
+  const handoff=await issue({image:true,local:['local-launch','no-extension','reuse'].includes(mode)});
+  const page=await context.newPage();await page.goto(handoff.url,{waitUntil:'commit'});
+  if(mode==='no-extension'){
+    await page.waitForSelector('#setup');
+    assert((await page.locator('textarea').inputValue()).includes('Selected passage'));
+    assert((await page.locator('#setup').textContent()).includes('加载解压缩的扩展'));
+    assert.equal((await issue({status:true})).state,'waiting-extension');
+    checks.push('Missing extension shows setup steps and preserves selected text on a local page');
+  }else if(mode==='upload-failure'){
+    await page.waitForFunction(()=>window.fixture?.draft.includes('Selected passage'),{},{timeout:20000});
+    await waitState('upload-error');
+    assert((await page.evaluate(()=>window.fixture.draft)).includes('Selected passage'));
+    checks.push('Upload failure reports its cause while selected text remains in the input box');
+  }else{
+  await page.waitForFunction(()=>window.fixture?.draft.includes('Selected passage'),{},{timeout:20000});
+  await page.waitForFunction(()=>window.fixture.uploads.length===2,{},{timeout:15000});
+  const result=await page.evaluate(()=>window.fixture);
+  assert.equal(result.sends,0);
+  assert.equal(result.uploads[0].sha,handoff.sourceSha256);
+  assert.equal(result.uploads[0].name,handoff.files[0].name);
+  assert.equal(result.uploads[1].name,handoff.files[1].name);
+  assert.equal(uploads.length,2);
+  assert(uploads[0].includes(Buffer.from('%PDF-')));
+  assert.equal(errors.length,0,errors.join('\n'));
+  checks.push('Real MV3 worker fetches the Python bridge and transfers exact PDF bytes');
+  checks.push('Real file input/drop sends document and image to the isolated upload fixture');
+  checks.push('Selected text enters the browser contenteditable; no message is sent');
+  await waitState('ready');
+  if(mode==='reuse'){
+    await page.evaluate(()=>window.sendFixture());
+    await waitState('bound');
+    const next=await issue({quote:'A second passage from the same paper.',local:true});
+    assert.equal(next.files.length,0,'A sent and bound primary document must not be uploaded again');
+    assert(next.url.startsWith('http://127.0.0.1:'));
+    const incoming=await context.newPage();await incoming.goto(next.url,{waitUntil:'commit'});
+    await page.waitForFunction(()=>window.fixture?.draft.includes('A second passage'),{},{timeout:20000});
+    await waitState('ready');
+    assert.equal((await page.evaluate(()=>window.fixture)).uploads.length,2);
+    assert.equal(context.pages().filter(p=>p.url().startsWith('https://chatgpt.com/')).length,1);
+    checks.push('After sending the fixture message, the same document reuses its bound tab without reuploading the primary');
+  }
+  }
+  const report={passed:true,mode,headless:true,isolated_profile:true,user_profiles_accessed:false,checks};
+  fs.writeFileSync(path.join(root,'build/chat-integration-'+mode+'-check.json'),JSON.stringify(report,null,2));
+  console.log(JSON.stringify(report));
+})().catch(error=>{console.error(error.stack);process.exitCode=1;}).finally(async()=>{
+  if(context)await context.close();
+  backend.stdin.end(JSON.stringify({stop:true})+'\n');
+});

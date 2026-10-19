@@ -128,5 +128,20 @@ class ChatBridgeTests(unittest.TestCase):
             self.bridge.bind(token,target,True)
         self.assertLessEqual(len(self.bridge.requests),1)
 
+    def test_connection_page_shows_setup_and_escapes_selected_text(self):
+        url,token=self.prepare(quote='Selected </textarea><script>bad()</script>')
+        local=self.bridge.open_url(url)
+        self.assertEqual(local,f'http://127.0.0.1:{self.bridge.server.server_port}/handoff/{token}/open')
+        page=self.bridge.connection_page(token).decode('utf-8')
+        self.assertIn('paperquick-handoff',page)
+        self.assertIn('加载解压缩的扩展',page)
+        self.assertNotIn('<script>bad()</script>',page)
+        self.assertIn('&lt;script&gt;bad()',page)
+        self.assertEqual(self.bridge.status(token)['state'],'waiting-extension')
+        self.bridge.update_status(token,'text-ready')
+        self.assertEqual(self.bridge.status(token)['state'],'text-ready')
+        with self.assertRaises(ValueError):self.bridge.update_status(token,'anything')
+        with self.assertRaises(ValueError):self.bridge.open_url(url.replace('chatgpt.com','evil.test'))
+
 
 if __name__ == '__main__': unittest.main()

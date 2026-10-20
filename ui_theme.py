@@ -9,6 +9,8 @@ _CORE = ('BG', 'PANEL', 'SURFACE', 'INPUT', 'FG', 'MUTED', 'ACCENT', 'LINE')
 BASE = dict(zip(_CORE, ('#101722', '#192331', '#243247', '#121d2b',
                         '#edf3fb', '#a5b4c8', '#99c5ff', '#35475f')))
 SKINS = {
+    '书页白': dict(BASE, BG='#f5f4f0', PANEL='#ffffff', SURFACE='#eeede8',
+                  INPUT='#fcfcfa', FG='#26352f', MUTED='#5f6b64', ACCENT='#29634c', LINE='#dce1da'),
     '深空蓝': BASE,
     '极光紫': dict(BASE, BG='#181523', PANEL='#242034', SURFACE='#342d49',
                   INPUT='#1b1729', ACCENT='#cfb7fa', LINE='#514461'),
@@ -17,22 +19,22 @@ SKINS = {
     '极简浅色': dict(BASE, BG='#f4f6fa', PANEL='#ffffff', SURFACE='#e9eef6',
                    INPUT='#fcfdff', FG='#233249', MUTED='#58697f',
                    ACCENT='#245faa', LINE='#cbd5e3'),
-    '琉璃·冰川蓝': dict(BASE, BG='#e5f2fc', PANEL='#f3faff', SURFACE='#d3e7f7',
-                      INPUT='#f8fcff', FG='#172e46', MUTED='#405b73', ACCENT='#205b94', LINE='#9abdd8'),
+    '琉璃·冰川蓝': dict(BASE, BG='#f2f5f9', PANEL='#ffffff', SURFACE='#e7edf5',
+                      INPUT='#fbfcfe', FG='#24364c', MUTED='#53677d', ACCENT='#2d6197', LINE='#d1dce8'),
     '琉璃·翡翠绿': dict(BASE, BG='#e5f5ee', PANEL='#f2fcf7', SURFACE='#cfe9dd',
                       INPUT='#f7fdf9', FG='#173c30', MUTED='#3f6355', ACCENT='#226546', LINE='#95c8b1'),
     '琉璃·蔷薇粉': dict(BASE, BG='#f9eaf1', PANEL='#fff5fa', SURFACE='#efd5e2',
                       INPUT='#fff9fc', FG='#46283b', MUTED='#725164', ACCENT='#8e3f65', LINE='#d4a6bd'),
-    '琉璃·鸢尾紫': dict(BASE, BG='#eeeafa', PANEL='#f9f6ff', SURFACE='#dfd7f0',
-                      INPUT='#fcfaff', FG='#35294e', MUTED='#615578', ACCENT='#674494', LINE='#b9aad4'),
+    '琉璃·鸢尾紫': dict(BASE, BG='#f5f3f8', PANEL='#ffffff', SURFACE='#ece8f2',
+                      INPUT='#fdfcfe', FG='#352e43', MUTED='#665c77', ACCENT='#6b5290', LINE='#dcd5e6'),
     '琉璃·琥珀金': dict(BASE, BG='#faf0de', PANEL='#fff9ed', SURFACE='#ecddbd',
                       INPUT='#fffdf7', FG='#45351c', MUTED='#6c5939', ACCENT='#80561a', LINE='#ccb58b'),
     '琉璃·深海青': dict(BASE, BG='#102c36', PANEL='#193b46', SURFACE='#234d59',
                       INPUT='#102f3a', FG='#eefcff', MUTED='#b1d1da', ACCENT='#9ce4ea', LINE='#50808c'),
 }
 GLASS_SKINS = tuple(name for name in SKINS if name.startswith('琉璃·'))
-CURRENT_SKIN = '深空蓝'
-globals().update(BASE)
+CURRENT_SKIN = '书页白'
+globals().update(SKINS[CURRENT_SKIN])
 _LEGACY = dict(zip(_CORE, ('#080f1c', '#101c2e', '#15243a', '#0b1627',
                           '#e5effb', '#8ca3be', '#41d9e6', '#223b55')))
 
@@ -106,7 +108,7 @@ def apply_skin(root, name):
     """Apply a palette to open pages and dialogs, retaining their current contents."""
     import sys
     global CURRENT_SKIN
-    name = name if name in SKINS else '深空蓝'
+    name = name if name in SKINS else '书页白'
     previous = {key: globals()[key] for key in _CORE}
     palette, tokens = SKINS[name], _tokens(SKINS[name])
     mapping = {value: palette[key] for source in (_LEGACY, BASE, previous)
@@ -123,8 +125,11 @@ def apply_skin(root, name):
         '#77ddba': tokens['read'], '#e6b980': tokens['warning'],
     })
     globals().update(palette)
-    for module_name in ('app', 'library_ui', 'reader_ui', 'graph_ui', 'summary_ui', '__main__'):
-        module = sys.modules.get(module_name)
+    from pathlib import Path
+    directory=Path(__file__).resolve().parent
+    for module in list(sys.modules.values()):
+        location=getattr(module,'__file__',None)
+        if not location or Path(location).resolve().parent!=directory:continue
         if module:
             for key, value in palette.items():
                 if hasattr(module, key):
@@ -141,6 +146,10 @@ def apply_skin(root, name):
 
 def install_theme(root):
     root.configure(bg=BG)
+    from ui_widgets import install_scrolling
+    install_scrolling(root)
+    for widget_class in ('TCombobox','TEntry','TSpinbox'):
+        root.option_add(f'*{widget_class}.font',(FONT,10))
     tokens = _tokens({key: globals()[key] for key in _CORE})
     # A wildcard *Font also becomes ttk.Label's explicit widget font and
     # overrides Hero/CardStat styles. Limit option defaults to classic Tk.
@@ -179,7 +188,7 @@ def install_theme(root):
         'Number.TLabel': dict(background=PANEL, font=(DISPLAY, 29), foreground=ACCENT),
     }.items():
         style.configure(name, **options)
-    style.configure('TButton', background=SURFACE, foreground=FG, padding=(15, 10),
+    style.configure('TButton', background=SURFACE, foreground=FG, padding=(12, 8),
                     borderwidth=0, relief='flat', focuscolor=ACCENT, focusthickness=1)
     style.map('TButton', background=[('disabled', SURFACE), ('pressed', tokens['pressed']), ('active', tokens['hover'])],
               foreground=[('disabled', tokens['disabled']), ('!disabled', FG)])
@@ -197,11 +206,12 @@ def install_theme(root):
     style.map('SelectedIcon.TButton',background=[('pressed',tokens['pressed']),('active',tokens['hover']),('!disabled',tokens['selection'])])
     style.configure('Toolbar.TEntry',padding=3)
     style.configure('TEntry', fieldbackground=INPUT, foreground=FG, insertcolor=ACCENT,
-                    selectbackground=tokens['selection'], selectforeground=FG, padding=9, borderwidth=1)
+                    selectbackground=tokens['selection'], selectforeground=FG, padding=(9,6), borderwidth=1)
     style.map('TEntry', bordercolor=[('focus', ACCENT)],
               foreground=[('disabled', MUTED)], fieldbackground=[('disabled', SURFACE)])
     style.configure('TCombobox', fieldbackground=INPUT, background=SURFACE, foreground=FG,
-                    arrowcolor=MUTED, padding=8, borderwidth=1)
+                    arrowcolor=MUTED, padding=(9,6), borderwidth=1, arrowsize=16)
+    style.configure('Filter.TCombobox',padding=(8,5),arrowsize=16)
     style.map('TCombobox', fieldbackground=[('readonly', INPUT), ('disabled', SURFACE)],
               foreground=[('disabled', MUTED), ('readonly', FG)],
               selectbackground=[('readonly', INPUT)], selectforeground=[('readonly', FG)],
@@ -210,10 +220,10 @@ def install_theme(root):
                           'selectBackground': tokens['selection'], 'selectForeground': FG}.items():
         root.option_add('*TCombobox*Listbox.' + option, value)
     style.configure('Treeview', background=PANEL, fieldbackground=PANEL, foreground=FG,
-                    rowheight=46, borderwidth=0, font=(FONT, 10))
+                    rowheight=max(36,round(24*float(root.tk.call('tk','scaling')))), borderwidth=0, font=(FONT, 10))
     style.map('Treeview', background=[('selected', tokens['selection'])], foreground=[('selected', FG)])
     style.configure('Treeview.Heading', background=SURFACE, foreground=MUTED,
-                    padding=(12, 12), font=(FONT, 10, 'bold'), relief='flat')
+                    padding=(8, 9), font=(FONT, 10, 'bold'), relief='flat')
     style.map('Treeview.Heading', background=[('active', tokens['hover'])], foreground=[('active', FG)])
     style.configure('TNotebook', background=BG, borderwidth=0, tabmargins=(0, 0, 0, 12))
     # Button.border supplies a flat filled surface without clam's raised tab

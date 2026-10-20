@@ -19,6 +19,39 @@ def normalize_tags(value):
 
 
 class LibraryOrganization:
+    def all_tags(self):
+        tags = {}
+        for record in self.records():
+            for tag in record.get('tags',[]):tags.setdefault(tag.casefold(),tag)
+        for row in self.db.execute('SELECT tag FROM project_tag_rules'):
+            tags.setdefault(row[0].casefold(),row[0])
+        return sorted(tags.values(),key=str.casefold)
+
+    def change_tag(self, old, new=None):
+        """Rename/merge or delete a tag and its automatic project rules atomically."""
+        old_tags=normalize_tags([old]);new_tags=normalize_tags([new]) if new is not None else []
+        if not old_tags or (new is not None and not new_tags):raise ValueError('请填写标签名称。')
+        key=old_tags[0].casefold();replacement=new_tags[0] if new_tags else None
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            projects=[r[0] for r in self.db.execute('SELECT project FROM project_tag_rules WHERE tag=?',(key,))]
+            self.db.execute('DELETE FROM project_tag_rules WHERE tag=?',(key,))
+            if replacement:
+                self.db.executemany('INSERT OR IGNORE INTO project_tag_rules VALUES(?,?)',[(pid,replacement.casefold()) for pid in projects])
+            changed=0
+            for record in self.records():
+                tags=record.get('tags',[])
+                if any(t.casefold()==key for t in tags):
+                    tags=normalize_tags([replacement if t.casefold()==key else t for t in tags if t.casefold()!=key or replacement])
+                    import json,time
+                    row=self.db.execute('SELECT data FROM papers WHERE id=?',(record['id'],)).fetchone()
+                    data=json.loads(row[0]);data['tags']=tags
+                    self.db.execute('UPDATE papers SET data=?,updated=? WHERE id=?',(json.dumps(data,ensure_ascii=False),time.time(),record['id']))
+                    changed+=1
+                self.sync_tag_memberships(record['id'],tags,record['primary_project'])
+            self.log('change-tag',{'old':old,'new':replacement,'count':changed})
+        return changed
+
     def organization_schema(self):
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')

@@ -152,13 +152,28 @@ def pdf_metadata(path):
         sys.path.insert(0, str(Path(__file__).parent / 'build' / 'vendor'))
         from pypdf import PdfReader
     reader = PdfReader(path, strict=False)
+    if reader.is_encrypted and not reader.decrypt(''):
+        raise ValueError('PDF 需要打开密码，请先另存为无需密码的副本后导入。')
     meta = reader.metadata or {}
     texts = []
     indices=sorted(set(range(min(12,len(reader.pages))))|set(range(max(0,len(reader.pages)-12),len(reader.pages))))
-    for index in indices:
-        page=reader.pages[index]
-        # Avoid processing enormous content streams in unexpectedly large PDFs.
-        texts.append((page.extract_text() or '')[:30000])
+    try:
+        # Native extraction avoids Python layout analysis of every glyph in dense
+        # PDFs. Reuse the renderer's lock; PDFium is not thread-safe.
+        from pdf_reader_core import pdfium,_LOCK
+        with _LOCK,pdfium().PdfDocument(path) as document:
+            for index in indices:
+                page=document[index]
+                try:
+                    textpage=page.get_textpage()
+                    try:texts.append(textpage.get_text_range(count=min(30000,textpage.count_chars())))
+                    finally:textpage.close()
+                except Exception:texts.append('')
+                finally:page.close()
+    except Exception:
+        for index in indices:
+            try:texts.append((reader.pages[index].extract_text() or '')[:30000])
+            except Exception:texts.append('')
     text = '\n'.join(texts)[:500000]
     title = str(meta.get('/Title') or '').strip()
     if not title or title.lower().startswith(('microsoft', 'untitled')):
@@ -253,13 +268,19 @@ class Library(LibraryWorkflow, LibraryOrganization):
             self.db.execute('INSERT INTO projects(id,name,folder,parent) VALUES(?,?,?,?)', (pid, name, folder, parent or ''))
         return pid
 
-    def records(self, project=None):
-        query = 'SELECT p.* FROM papers p'
+    def records(self, project=None, summary=False):
+        # List pages never load full document text, images, or long annotations.
+        data="json_remove(p.data,'$.text','$.notes','$.references','$.annotations','$.note_images','$.note_styles') AS data" if summary else 'p.data'
+        query = 'SELECT p.id,p.primary_project,p.updated,'+data+' FROM papers p'
         args = ()
         if project:
             args = tuple(self.project_descendants(project))
             query += ' WHERE p.id IN (SELECT paper FROM memberships WHERE project IN (' + ','.join('?' for _ in args) + '))'
-        return [self._record(row) for row in self.db.execute(query + ' ORDER BY p.updated DESC', args)]
+        rows=self.db.execute(query + ' ORDER BY p.updated DESC', args).fetchall()
+        memberships=collections.defaultdict(list);attachments=collections.defaultdict(list)
+        for item in self.db.execute('SELECT * FROM memberships'):memberships[item['paper']].append(item['project'])
+        for item in self.db.execute('SELECT * FROM attachments ORDER BY rowid'):attachments[item['paper']].append(dict(item))
+        return [self._record(row,memberships,attachments) for row in rows]
 
     def recent_read(self, limit=50):
         """Unique papers in last-opened order, without loading document bodies."""
@@ -270,11 +291,11 @@ class Library(LibraryWorkflow, LibraryOrganization):
             ORDER BY last_read DESC, id LIMIT ?
         ''', (max(0, int(limit)),))]
 
-    def _record(self, row):
+    def _record(self, row, memberships=None, attachments=None):
         data = json.loads(row['data'])
         data.update(id=row['id'], primary_project=row['primary_project'])
-        data['projects'] = [r[0] for r in self.db.execute('SELECT project FROM memberships WHERE paper=?', (row['id'],))]
-        data['attachments'] = [dict(r) for r in self.db.execute('SELECT * FROM attachments WHERE paper=? ORDER BY rowid', (row['id'],))]
+        data['projects'] = memberships[row['id']] if memberships is not None else [r[0] for r in self.db.execute('SELECT project FROM memberships WHERE paper=?', (row['id'],))]
+        data['attachments'] = attachments[row['id']] if attachments is not None else [dict(r) for r in self.db.execute('SELECT * FROM attachments WHERE paper=? ORDER BY rowid', (row['id'],))]
         data.setdefault('tags', [])
         data.setdefault('rating', 0)
         return data
@@ -296,7 +317,9 @@ class Library(LibraryWorkflow, LibraryOrganization):
         if 'doi' in data:
             data['doi'] = normalize_doi(data['doi'])
         if not rid and deduplicate and data.get('doi'):
-            rid = next((r['id'] for r in self.records() if r.get('doi') == data['doi']), None)
+            row=self.db.execute("SELECT id FROM papers WHERE json_extract(data,'$.doi')=? LIMIT 1",(data['doi'],)).fetchone()
+            rid=row[0] if row else None
+        if getattr(self,'_import_observer',None):self._import_observer(rid)
         if rid:
             old = self.get(rid)
             merged = {k: v for k, v in old.items() if k not in ('id', 'projects', 'attachments', 'primary_project')}
@@ -523,6 +546,7 @@ class Library(LibraryWorkflow, LibraryOrganization):
         sha = digest(source)
         old = self.db.execute('SELECT * FROM attachments WHERE sha=? ORDER BY rowid', (sha,)).fetchone()
         if old:
+            if getattr(self,'_import_observer',None):self._import_observer(old['paper'])
             self._restore_attachment(dict(old), source)
             self.assign(old['paper'], project)
             return old['paper']
@@ -541,6 +565,7 @@ class Library(LibraryWorkflow, LibraryOrganization):
         sha = digest(source)
         old = self.db.execute('SELECT * FROM attachments WHERE sha=? ORDER BY rowid', (sha,)).fetchone()
         if old:
+            if getattr(self,'_import_observer',None):self._import_observer(old['paper'])
             self._restore_attachment(dict(old), source)
             self.assign(old['paper'], project)
             return old['paper']
@@ -551,7 +576,8 @@ class Library(LibraryWorkflow, LibraryOrganization):
 
     def _preserve_primary_text(self, metadata):
         if metadata.get('doi'):
-            old = next((r for r in self.records() if r.get('doi') == normalize_doi(metadata['doi'])), None)
+            row=self.db.execute("SELECT id FROM papers WHERE json_extract(data,'$.doi')=? LIMIT 1",(normalize_doi(metadata['doi']),)).fetchone()
+            old=self.get(row[0]) if row else None
             if old and self.primary_attachment(old['id']):
                 metadata.pop('text', None)
                 metadata.pop('references', None)

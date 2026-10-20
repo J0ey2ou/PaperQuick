@@ -97,7 +97,7 @@ class ReaderSelectionTests(unittest.TestCase):
         r._chat_bridge = bridge
         with patch('webbrowser.open', return_value=True) as browser:
             r.open_chat(quote='selected quotation', page=1)
-        bridge.prepare.assert_called_once_with(self.rid, quote='selected quotation', image=None, page=1)
+        bridge.prepare.assert_called_once_with(self.rid, quote='selected quotation', image=None, page=1,anchor={'rect':[.06,.06,.06,.06],'quote':'selected quotation'})
         browser.assert_called_once_with(bridge.open_url.return_value)
 
     def test_cross_page_text_selection_crops_both_pages_in_reading_order(self):

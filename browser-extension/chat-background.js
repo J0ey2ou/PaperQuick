@@ -26,7 +26,7 @@ async function currentRoute(sender){
 
 async function localRequest(value, suffix = '', body) {
   const {port, token} = descriptor(value);
-  if (suffix && !/^\/(?:file\/\d+\/\d+|bind|status)$/.test(suffix)) throw new Error('无效请求。');
+  if (suffix && !/^\/(?:file\/\d+\/\d+|bind|status|reply)$/.test(suffix)) throw new Error('无效请求。');
   const response = await fetch(`http://127.0.0.1:${port}/handoff/${token}${suffix}`, {
     method: body ? 'POST' : 'GET', cache: 'no-store', credentials: 'omit', redirect: 'error',
     headers: {'X-PaperQuick': '1', ...(body ? {'Content-Type': 'application/json'} : {})},
@@ -87,7 +87,17 @@ export function installChatBridge() {
       if (message.type === 'paperQuickChatRoute') return route(message, sender);
       if (message.type === 'paperQuickChatResume') {
         const saved = (await chrome.storage.session.get(pendingKey))[pendingKey];
-        return {ok: true, descriptor: saved?.route === await currentRoute(sender) ? saved.descriptor : ''};
+        const replyKey='chat-reply:'+sender.tab.id;
+        const reply=(await chrome.storage.session.get(replyKey))[replyKey];
+        const url=await currentRoute(sender);
+        return {ok: true, descriptor: saved?.route === url ? saved.descriptor : '',replyDescriptor:reply?.route===url?reply.descriptor:''};
+      }
+      if(message.type==='paperQuickChatReply'){
+        const url=await currentRoute(sender),key='chat-replies:'+sender.tab.id;
+        const allowed=(await chrome.storage.session.get(key))[key]||[];
+        if(!allowed.some(item=>item.descriptor===message.descriptor&&item.route===url))throw new Error('当前对话没有这篇文献的回存授权，请从阅读器重新连接。');
+        if(typeof message.text!=='string'||!message.text.trim()||message.text.length>100000)throw new Error('请选择一条有效回复（最多 10 万字）。');
+        return await localRequest(message.descriptor,'/reply',{url,text:message.text,messageId:String(message.messageId||'').slice(0,200)});
       }
       if (message.type === 'paperQuickChatPayload') {
         const payload = await localRequest(message.descriptor);
@@ -106,6 +116,9 @@ export function installChatBridge() {
         const url = await currentRoute(sender);
         if (!url || url.endsWith('/')) throw new Error('请先发送一条消息，形成可保存的普通对话。');
         await localRequest(message.descriptor, '/bind', {url, primaryAttached: message.primaryAttached === true});
+        const reply={descriptor:message.descriptor,route:url},key='chat-replies:'+sender.tab.id;
+        const allowed=(await chrome.storage.session.get(key))[key]||[];
+        await chrome.storage.session.set({['chat-reply:'+sender.tab.id]:reply,[key]:[...allowed.filter(item=>item.descriptor!==message.descriptor).slice(-63),reply]});
         await chrome.storage.session.remove(pendingKey);
         return {ok: true};
       }

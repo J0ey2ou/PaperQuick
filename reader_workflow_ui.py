@@ -44,6 +44,9 @@ class ReaderWorkflow:
         self.reading_menu.add_cascade(label='阅读状态',menu=state_menu);self.reading_menu.add_cascade(label='文献评分',menu=rating_menu)
         self.reading_menu.add_separator()
         for label,command in [('复制选中文字',self.copy_selected),('插入选区截图到笔记',self.selection_screenshot),('关联已收集文献…',self.link_collected),('在此处添加超链接…',self.add_hyperlink),('在顶部显示参考文献',self.dock_references),('修改 Word 原文',self.edit_document)]:self.reading_menu.add_command(label=label,command=command)
+        self.reading_menu.add_command(label='记住此处作为文献链接目标',command=self.remember_link_location)
+        self.reading_menu.add_command(label='在此处插入已记住的位置链接',command=self.insert_remembered_link)
+        self.reading_menu.add_command(label='导出带批注和位置链接的 PDF 副本',command=self.export_annotated_pdf)
         self.canvas.bind('<Escape>',lambda _:(self.cancel_box_selection(),self.tool.set('选择文字'),'break')[-1])
         self.tool.trace_add('write',lambda *_:self.selection_tool_changed())
         self.notes.bind('<Control-v>',self.paste_note_image);self.notes.bind('<Control-V>',self.paste_note_image)
@@ -203,7 +206,9 @@ class ReaderWorkflow:
         if not self.rid:return
         import webbrowser
         try:
-            bridge=self.chat_bridge();url=bridge.prepare(self.rid,quote=quote,image=image,page=page)
+            bridge=self.chat_bridge();item=self.current_selection()
+            anchor=item or {'rect':[*getattr(self,'context_point',[.06,.06])]*2,'quote':quote}
+            url=bridge.prepare(self.rid,quote=quote,image=image,page=page,anchor=anchor)
             if not webbrowser.open(bridge.open_url(url)):raise ValueError('默认浏览器未能打开。请检查浏览器设置。')
             token=url.split('#paperquick=')[1].split('.',1)[1]
             self._chat_monitor=token
@@ -279,10 +284,10 @@ class ReaderWorkflow:
             page=a.get('page',0)
             if page not in self.document_canvas.layout:continue
             coords=self.document_canvas.coords(page,a['rect']);tags=('annotation',a['id']);color=a.get('color','#5aa5eb')
-            point=a['kind'] in ('笔记','链接','关联文献','参考文献','书签') or a.get('original')
+            point=a['kind'] in ('笔记','链接','关联文献','参考文献','书签','ChatGPT 批注') or a.get('original')
             if point:
                 x,y=coords[:2];size=self.marker_size;self.canvas.create_oval(x-2,y-2,x+size,y+size,fill=color,outline='#ffffff',tags=tags)
-                symbol='笔' if a['kind']=='笔记' else '↗' if a['kind'] in ('链接','参考文献','原文件链接') else '链' if a['kind']=='关联文献' else '评' if a.get('original') else '签'
+                symbol='AI' if a['kind']=='ChatGPT 批注' else '笔' if a['kind']=='笔记' else '↗' if a['kind'] in ('链接','参考文献','原文件链接') else '链' if a['kind']=='关联文献' else '评' if a.get('original') else '签'
                 self.canvas.create_text(x+size/2-1,y+size/2-1,text=symbol,fill='white',font=(FONT,max(8,size//2),'bold'),tags=tags)
             else:
                 self.canvas.create_rectangle(*coords,fill=color,stipple='gray25',outline=color,width=1,tags=tags)
@@ -326,6 +331,8 @@ class ReaderWorkflow:
 
     def activate_marker(self,a):
         if a.get('target'):
+            if 'target_page' in a:
+                self.open_link_location(a);return
             if getattr(self,'on_open_related',None):self.on_open_related(a['target'])
             else:self.open(a['target'])
         elif a.get('url'):
@@ -340,6 +347,76 @@ class ReaderWorkflow:
         elif a.get('original'):
             messagebox.showinfo('原文件批注',(a.get('author','')+'\n'+a.get('quote','')+'\n\n'+a.get('text','')).strip(),parent=self.frame)
         else:self.annotation_editor(dict(a))
+
+    def remember_link_location(self):
+        if not self.rid:return
+        lib=Library(self.directory)
+        try:
+            from document_links import destination
+            item=self.current_selection() or {}
+            point=item.get('rect',getattr(self,'context_point',[.05,.05]))[:2]
+            target=destination(lib,self.rid,item.get('page',getattr(self,'context_page',self.page)),point,self.attachment_id,item.get('quote',''))
+            lib.set_setting('document_link_destination',target)
+            self.status.set(f"已记住《{target['title']}》第 {target['target_page']+1} 页的位置；打开另一篇文献后可右键插入链接。")
+        except (ValueError,OSError) as exc:self.status.set(str(exc))
+        finally:lib.close()
+
+    def export_annotated_pdf(self):
+        if not self.rid or self.busy:return
+        output=filedialog.asksaveasfilename(parent=self.frame,title='导出 PDF 副本（原文保留）',defaultextension='.pdf',filetypes=[('PDF','*.pdf')])
+        if not output:return
+        self.document_job=True;self.status.set('正在后台导出 PDF 批注副本…')
+        generation=self.generation;rid=self.rid;attachment=self.attachment_id
+        def job():
+            lib=None
+            try:
+                from annotation_export import export_pdf
+                lib=Library(self.directory);result=export_pdf(lib,rid,attachment,output)
+                self.events.put(('pdf-exported',generation,result))
+            except Exception as exc:self.events.put(('document-error',generation,str(exc)))
+            finally:
+                if lib:lib.close()
+        threading.Thread(target=job,daemon=True).start()
+
+    def insert_remembered_link(self):
+        if not self.rid:return
+        lib=Library(self.directory)
+        try:
+            from document_links import destination
+            saved=lib.setting('document_link_destination',{})
+            if not saved:raise ValueError('请先在目标 PDF 上右键“记住此处作为文献链接目标”。')
+            target=destination(lib,saved['target'],saved['target_page'],saved['target_point'],saved['target_attachment'],saved.get('target_quote',''))
+            if self.rid!=target['target']:lib.relate(self.rid,target['target'],'位置链接')
+            title=target.pop('title');self.add_point_marker('关联文献',f"{title} · 第 {target['target_page']+1} 页",**target)
+            self.status.set('已留下位置链接；双击页内标记可跳到目标文献的对应位置。')
+        except (ValueError,OSError,KeyError) as exc:self.status.set(str(exc))
+        finally:lib.close()
+
+    def open_link_location(self,link):
+        lib=Library(self.directory)
+        try:
+            from document_links import destination
+            target=destination(lib,link['target'],link['target_page'],link.get('target_point',[.05,.05]),link.get('target_attachment'),link.get('target_quote',''))
+        except (ValueError,OSError,KeyError) as exc:self.status.set('无法跳转：'+str(exc));return
+        finally:lib.close()
+        self.open(target['target'],attachment_id=target['target_attachment'])
+        if self.rid!=target['target']:return
+        self._pending_location=target
+
+    def apply_link_location(self):
+        target=getattr(self,'_pending_location',None)
+        if not target or self.loading or not self.path:return
+        page=target['target_page']
+        if page not in self.document_canvas.layout:
+            self.change_page(page-self.page);return
+        x,y,_,_=self.document_canvas.coords(page,[*target['target_point']]*2)
+        region=list(map(float,self.canvas.cget('scrollregion').split()))
+        self.canvas.yview_moveto(max(0,(y-60)/max(1,region[3])))
+        self.document_canvas.schedule();self._pending_location=None
+        self.canvas.delete('link-destination')
+        mark=self.canvas.create_oval(x-7,y-7,x+7,y+7,fill='#538a76',outline='white',width=2,tags='link-destination')
+        self.canvas.after(3500,lambda:self.canvas.delete(mark) if self.canvas.winfo_exists() else None)
+        self.status.set(f"已跳转到第 {page+1} 页的链接位置。"+(' 摘录：'+target['target_quote'][:120] if target.get('target_quote') else ''))
 
     def link_collected(self):
         if not self.rid:return
@@ -356,13 +433,21 @@ class ReaderWorkflow:
             for r in records:
                 if term.get().casefold() in (r['title']+' '+r['doi']).casefold():tree.insert('','end',iid=r['id'],values=(r['title'],r['year']))
         term.trace_add('write',fill);fill()
+        position=ttk.Frame(panel);position.pack(fill='x',pady=6)
+        page_value=tk.StringVar(value='1');offset=tk.StringVar(value='0')
+        ttk.Label(position,text='目标页码').pack(side='left');ttk.Spinbox(position,from_=1,to=100000,textvariable=page_value,width=7).pack(side='left',padx=8)
+        ttk.Label(position,text='页内纵向位置 %').pack(side='left');ttk.Spinbox(position,from_=0,to=100,textvariable=offset,width=7).pack(side='left',padx=8)
         def save():
             ids=tree.selection()
             if not ids:return
             target=ids[0];lib=Library(self.directory)
-            try:lib.relate(self.rid,target);title=lib.get(target)['title']
+            try:
+                from document_links import destination
+                fields=destination(lib,target,int(page_value.get())-1,(.05,float(offset.get())/100))
+                lib.relate(self.rid,target);title=fields.pop('title')
+            except (ValueError,OSError) as exc:self.status.set(str(exc));return
             finally:lib.close()
-            self.add_point_marker('关联文献',title,target=target);dialog.destroy();self.status.set('已关联；双击页内标记即可打开，图谱中也会显示。')
+            self.add_point_marker('关联文献',title+f" · 第 {fields['target_page']+1} 页",**fields);dialog.destroy();self.status.set('已关联到具体位置；双击页内标记即可打开，图谱中也会显示。')
             if getattr(self,'on_library_changed',None):self.on_library_changed()
         ttk.Button(panel,text='关联并留下页内标记',style='Accent.TButton',command=save).pack(anchor='e',pady=12)
 
@@ -503,7 +588,9 @@ class ReaderWorkflow:
         threading.Thread(target=job,daemon=True).start();return 'break'
 
     def workflow_event(self,kind,value):
-        if kind=='canvas-page':
+        if kind=='pdf-exported':
+            self.document_job=False;self.status.set(f"已导出 {value['comments']} 条批注、{value['links']} 个位置链接。目标文件移动后需重新导出链接。")
+        elif kind=='canvas-page':
             sign,page,data,error=value
             if sign!=self.document_canvas.sign:return True
             self.document_canvas.pending.discard(page)

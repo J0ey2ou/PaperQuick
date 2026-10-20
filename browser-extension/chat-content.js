@@ -7,6 +7,43 @@
   const route = () => location.origin + location.pathname;
   const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
   const isConversation = () => /^\/c\/[a-zA-Z0-9-]{8,100}$/.test(location.pathname);
+  let replyContext=null,replyObserver=null,replyTimer=null;
+  function enableReplies(descriptor) {
+    replyContext={descriptor,url:route(),user:[...document.querySelectorAll('[data-message-author-role="user"]')].at(-1)};
+    if(!replyObserver){
+      replyObserver=new MutationObserver(()=>{
+        if(replyTimer)return;
+        replyTimer=setTimeout(()=>{replyTimer=null;scanReplies();},350);
+      });
+      replyObserver.observe(document.documentElement,{childList:true,subtree:true});
+    }
+    scanReplies();
+  }
+  function scanReplies(){
+    const context=replyContext;
+    if(!context||route()!==context.url||!isConversation())return;
+    for(const message of document.querySelectorAll('[data-message-author-role="assistant"]')){
+      if(message.querySelector('[data-paperquick-reply]'))continue;
+      if(!context.user||!(context.user.compareDocumentPosition(message)&Node.DOCUMENT_POSITION_FOLLOWING))continue;
+      if(document.querySelector('[data-testid="stop-button"],button[aria-label="Stop streaming"]'))continue;
+      const button=document.createElement('button');button.type='button';button.dataset.paperquickReply='1';
+      button.textContent='存为文献批注';button.title='保存到文献直达中本次讨论的原选区 / 页码';
+      button.style.cssText='display:block;margin:12px 0 4px;padding:7px 12px;border:1px solid #c9d8d0;border-radius:8px;background:#f3f7f4;color:#295c47;font:13px/1.5 system-ui;cursor:pointer';
+      button.onclick=async()=>{
+        button.disabled=true;button.textContent='正在回存…';
+        try{
+          if(route()!==context.url)throw new Error('对话已切换，请重新连接文献。');
+          const body=message.querySelector('.markdown')||message;
+          const clone=body.cloneNode(true);clone.querySelectorAll('button,[data-paperquick-reply]').forEach(item=>item.remove());
+          const text=(clone.innerText||clone.textContent||'').trim();
+          const messageId=message.getAttribute('data-message-id')||message.closest('[data-testid^="conversation-turn"]')?.getAttribute('data-testid')||'';
+          await rpc('Reply',{descriptor:context.descriptor,text,messageId});
+          button.textContent='已保存到文献批注';
+        }catch(error){button.disabled=false;button.textContent='重试回存批注';notice(error.message);}
+      };
+      message.append(button);
+    }
+  }
   const composer = () => [...document.querySelectorAll('#prompt-textarea[contenteditable="true"], textarea#prompt-textarea, [data-testid="composer"] [contenteditable="true"], .ProseMirror[contenteditable="true"]')]
     .filter(editor => {
       const style = getComputedStyle(editor);
@@ -196,6 +233,7 @@
     try {
       await rpc('Bind', {descriptor: current.descriptor, primaryAttached: !!(primary && current.primaryAttached && sentText.includes(primary.name))});
       if (current !== pending) return;
+      enableReplies(current.descriptor);
       forgetCurrent();
       notice('对话已与这篇文献绑定，下次选区将继续此对话。');
       clearInterval(watch); watch = null;
@@ -277,6 +315,7 @@
       } else if (!current) {
         const result = await rpc('Resume');
         if (result.descriptor) await deliver(result.descriptor);
+        else if(result.replyDescriptor)enableReplies(result.replyDescriptor);
       }
     } catch (error) {
       if(value)try{await rpc('Status',{descriptor:value,state:'error',detail:error.message});}catch(_){}

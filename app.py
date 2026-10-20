@@ -113,9 +113,8 @@ class App:
         self.cards_id = self.canvas.create_window((0, 0), window=self.cards, anchor="nw")
         self.cards.bind("<Configure>", lambda event: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self.resize_cards)
-        root.bind_all("<MouseWheel>", self.wheel)
         from ui_theme import apply_skin
-        self.skin=apply_skin(root,self.preferences.get('skin','深空蓝'))
+        self.skin=apply_skin(root,self.preferences.get('skin','书页白'))
         self.root.after(1000,self.track_reading)
         footer = tk.Frame(page, bg=BG)
         footer.pack(fill="x", padx=28, pady=(8, 14))
@@ -183,6 +182,7 @@ class App:
         target=self.query_page if key=='query' else self.library_window.win if key=='library' else self.graph_page.frame if key=='graph' else self.reader_page.frame if key=='reader' else self.settings_page
         target.pack(fill='both',expand=True)
         self.current_page=key
+        if key=='library':self.library_window.refresh()
         for name,button in self.nav_buttons.items():button.configure(style='ActiveNav.TButton' if name==key else 'Nav.TButton')
         if key=='graph':self.graph_page.refresh()
         from ui_theme import apply_skin
@@ -228,6 +228,7 @@ class App:
         except Exception as exc:messagebox.showerror('文档未打开',str(exc),parent=self.root)
 
     def refresh_library_views(self):
+        if self.library_window:self.library_window.refresh()
         if self.graph_page:self.graph_page.refresh()
         if self.reader_page and self.reader_page.rid:
             from library_core import Library,display_name
@@ -530,7 +531,6 @@ class App:
         panel_id=viewport.create_window(0,0,window=panel,anchor='nw')
         panel.bind('<Configure>',lambda _:viewport.configure(scrollregion=viewport.bbox('all')))
         viewport.bind('<Configure>',lambda e:viewport.itemconfigure(panel_id,width=e.width))
-        viewport.bind('<MouseWheel>',lambda e:viewport.yview_scroll(-int(e.delta/120),'units'))
         self.settings_panel=panel
         ttk.Label(panel,text='设置',font=(FONT,21,'bold')).pack(anchor='w',pady=(0,12))
         from ui_theme import SKINS,GLASS_SKINS,apply_skin

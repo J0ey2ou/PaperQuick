@@ -21,7 +21,8 @@ class ReaderPage(ReaderWorkflow):
         self.workflow_state()
         header=ttk.Frame(self.frame,padding=(24,14));self.header=header;header.pack(fill='x')
         title=ttk.Frame(header);title.pack(side='left');ttk.Label(title,text='文献阅读',font=(FONT,21,'bold')).pack(anchor='w')
-        self.title=tk.StringVar(value='打开 PDF 或 Word，在这里阅读与记录想法');ttk.Label(title,textvariable=self.title,style='Muted.TLabel',wraplength=670).pack(anchor='w',pady=(5,0))
+        self.title=tk.StringVar(value='打开 PDF 或 Word，在这里阅读与记录想法');title_label=ttk.Label(title,textvariable=self.title,style='Muted.TLabel',wraplength=520);title_label.pack(anchor='w',pady=(5,0))
+        header.bind('<Configure>',lambda e:title_label.configure(wraplength=max(180,e.width-520)))
         ttk.Button(header,text='打开 PDF / Word / TXT',command=self.choose_pdf).pack(side='right');ttk.Button(header,text='参考文献侧栏',command=self.reference_panel).pack(side='right',padx=8)
         ttk.Button(header,text='最近阅读',command=self.toggle_recent_reading).pack(side='right')
         self.recent_panel=ttk.Frame(self.frame,padding=(24,0,24,12))
@@ -134,7 +135,7 @@ class ReaderPage(ReaderWorkflow):
         except (ValueError,OSError) as exc:
             self.status.set('无法打开最近阅读的文献：'+str(exc))
 
-    def open(self,rid,record_read=True):
+    def open(self,rid,record_read=True,attachment_id=None):
         if self.busy:raise ValueError('正在收纳或转换文档，请完成后再切换文献。')
         if self.editor_dirty and not messagebox.askyesno('原文尚未保存','放弃本次原文修改并打开文献？',parent=self.frame):return
         self.editor_dirty=False;self.word_editing=False
@@ -148,9 +149,10 @@ class ReaderPage(ReaderWorkflow):
         lib=Library(self.directory)
         try:
             record=lib.get(rid)
-            attachment=lib.primary_attachment(rid)
+            attachment=next((a for a in record['attachments'] if a['id']==attachment_id),None) if attachment_id else lib.primary_attachment(rid)
             if not attachment:raise ValueError('这篇文献尚未添加正文。请在“正文与附件”中添加 PDF 或 Word，并设为正文。')
             self.rid=rid;self.attachment_id=attachment['id'];self.source_path=self.directory/attachment['path'];self.path=None;self.page=0;self.count=0;self.generation+=1;self.loading=True;self.fit_pending=True;self.image_size=None
+            self._pending_location=None
             self.document_canvas.reset()
             if record_read:
                 changes={'read_count':record.get('read_count',0)+1,'last_read':time.time()}
@@ -163,7 +165,7 @@ class ReaderPage(ReaderWorkflow):
                     for start,end in ranges:
                         try:self.notes.tag_add(tag,start,end)
                         except tk.TclError:pass
-            self.annotations=record.get('annotations',[]);self.original_annotations=[];self.last_selection=None;self.refresh_annotations()
+            self.annotations=record.get('annotations',[]);self._annotation_ids={a['id'] for a in self.annotations};self.original_annotations=[];self.last_selection=None;self.refresh_annotations()
             self.references=record.get('references',[]);self.note_status.set('笔记会自动保存')
         finally:lib.close()
         self.hide_comparison();self.canvas.delete('all');self.page_label.set('正在打开文档…')
@@ -237,10 +239,15 @@ class ReaderPage(ReaderWorkflow):
 
     def poll(self):
         if self.closed:return
+        self.sync_incoming_annotations()
+        self.apply_link_location()
         try:
             while True:
                 kind,generation,value=self.events.get_nowait()
-                if kind=='open':self._import_busy=False;self.open(value);continue
+                if kind=='open':
+                    self._import_busy=False;self.open(value)
+                    if getattr(self,'on_library_changed',None):self.on_library_changed()
+                    continue
                 if kind=='import_error':self._import_busy=False;self.status.set('导入未完成：'+value);continue
                 if generation!=self.generation:continue
                 if self.workflow_event(kind,value):continue
@@ -421,8 +428,28 @@ class ReaderPage(ReaderWorkflow):
 
     def persist_annotations(self):
         lib=Library(self.directory)
-        try:lib.save({'annotations':self.annotations},rid=self.rid)
+        try:
+            self.annotations=lib.merge_annotations(self.rid,self.annotations,getattr(self,'_annotation_ids',()))
+            self._annotation_ids={a['id'] for a in self.annotations}
         finally:lib.close()
+
+    def sync_incoming_annotations(self):
+        if not self.rid or time.monotonic()-getattr(self,'_annotation_checked',0)<1.2:return
+        self._annotation_checked=time.monotonic()
+        import sqlite3,json
+        db=None
+        try:
+            db=sqlite3.connect((self.directory/'library.sqlite').resolve().as_uri()+'?mode=ro',uri=True,timeout=.1)
+            row=db.execute("SELECT json_extract(data,'$.annotations') FROM papers WHERE id=?",(self.rid,)).fetchone()
+            annotations=json.loads(row[0] or '[]') if row else []
+            if annotations!=self.annotations:
+                added={a['id'] for a in annotations}-getattr(self,'_annotation_ids',set())
+                self.annotations=annotations;self._annotation_ids={a['id'] for a in annotations}
+                self.refresh_annotations();self.draw_annotations()
+                if added:self.status.set('收到新的文献批注；在“高亮 / 批注”中可查看和定位。')
+        except (sqlite3.Error,OSError,ValueError):pass
+        finally:
+            if db:db.close()
 
     def refresh_annotations(self):
         self.annotation_list.delete(*self.annotation_list.get_children())
@@ -616,7 +643,11 @@ class ReaderPage(ReaderWorkflow):
         if attachment:self.compare_attachment(attachment)
         self.status.set('转换已完成，新文件已保存。'+('已在右侧打开比对。' if attachment else ''))
 
-    def scroll(self,event):self.canvas.yview_scroll(-int(event.delta/120),'units');return 'break'
+    def scroll(self,event):
+        from ui_widgets import wheel_units
+        units=wheel_units(self.canvas,event.delta)
+        if units:self.canvas.yview_scroll(units,'units')
+        return 'break'
     def close(self):
         if not self.can_close():return False
         self.save_notes();self.closed=True;self.generation+=1

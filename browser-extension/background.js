@@ -1,4 +1,6 @@
 import {readPage} from './page-reader.js';
+import {installChatBridge} from './chat-background.js';
+installChatBridge();
 
 async function menus() {
   await chrome.contextMenus.removeAll();

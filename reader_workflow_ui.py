@@ -34,6 +34,14 @@ class ReaderWorkflow:
         self.reading_menu.add_command(label='用 ChatGPT 讨论选框图片',command=self.chat_selected_image)
         self.reading_menu.add_command(label='框选图片供 ChatGPT 讨论',command=self.chat_image_tool)
         self.reading_menu.add_command(label='重新绑定这篇文献的 ChatGPT 对话',command=self.reset_chat)
+        self.reading_menu.add_command(label='用 ChatGPT 通篇解读 / 修改模板',command=self.chat_full_paper)
+        self.reading_menu.add_command(label='插入引用到笔记（自动页码）',command=self.insert_note_citation)
+        self.reading_menu.add_command(label='插入 Word 引用（自动页码）',command=self.insert_word_citation)
+        from library_organization import READING_STATES
+        state_menu=tk.Menu(self.reading_menu,tearoff=False);rating_menu=tk.Menu(self.reading_menu,tearoff=False)
+        for value in READING_STATES:state_menu.add_command(label=value,command=lambda v=value:self.set_reading_value('status',v))
+        for value in range(6):rating_menu.add_command(label=('未评分' if value==0 else '★'*value),command=lambda v=value:self.set_reading_value('rating',v))
+        self.reading_menu.add_cascade(label='阅读状态',menu=state_menu);self.reading_menu.add_cascade(label='文献评分',menu=rating_menu)
         self.reading_menu.add_separator()
         for label,command in [('复制选中文字',self.copy_selected),('插入选区截图到笔记',self.selection_screenshot),('关联已收集文献…',self.link_collected),('在此处添加超链接…',self.add_hyperlink),('在顶部显示参考文献',self.dock_references),('修改 Word 原文',self.edit_document)]:self.reading_menu.add_command(label=label,command=command)
         self.canvas.bind('<Escape>',lambda _:(self.cancel_box_selection(),self.tool.set('选择文字'),'break')[-1])
@@ -152,6 +160,44 @@ class ReaderWorkflow:
             from chat_bridge import ChatBridge
             self._chat_bridge=ChatBridge(self.directory)
         return self._chat_bridge
+
+    def chat_full_paper(self):
+        if not self.rid:return
+        from chat_prompt_ui import ChatPromptDialog
+        self.chat_prompt=ChatPromptDialog(self.frame,self.directory,self.rid,self.chat_bridge())
+
+    def citation_locator(self):
+        item=self.current_selection()
+        pages=sorted({r['page'] for r in item.get('regions',[])} or {item['page']}) if item else [getattr(self,'context_page',self.page)]
+        return str(pages[0]+1) if len(pages)==1 else f'{pages[0]+1}–{pages[-1]+1}'
+
+    def insert_note_citation(self):
+        if not self.rid:return
+        lib=Library(self.directory)
+        try:record=lib.get(self.rid)
+        finally:lib.close()
+        item=self.current_selection();quote=item.get('quote','').strip() if item else ''
+        author=re.split(r'[;；\n]',record.get('authors',''))[0].strip()
+        source='，'.join(v for v in [author,record.get('year',''),'《'+record['title']+'》'] if v)
+        text=('“'+quote+'”\n' if quote else '')+f'（{source}，第 {self.citation_locator()} 页）\n'
+        self.notes.insert('insert',text);self.dirty=True;self.save_notes();self.note_status.set('已插入带页码的引用；页码按阅读器页面计，可修改。')
+
+    def insert_word_citation(self):
+        if not self.rid:return
+        from word_citation_ui import WordCitationsWindow
+        window=getattr(self,'word_citations',None)
+        if window and not window.closed:
+            if window.busy:self.status.set('Word 引用仍在处理，请完成后再插入。');return
+            window.close()
+        self.word_citations=WordCitationsWindow(self.frame,self.directory,selected=[self.rid],locator=self.citation_locator())
+        self.word_citations.status.set('已带入当前文献和阅读器页码；可按论文印刷页码修改，再连接 Word 插入。')
+
+    def set_reading_value(self,key,value):
+        if not self.rid:return
+        lib=Library(self.directory)
+        try:lib.save({key:value},rid=self.rid)
+        finally:lib.close()
+        self.status.set('已保存阅读状态。' if key=='status' else '已保存文献评分。')
 
     def open_chat(self,quote='',image=None,page=0):
         if not self.rid:return

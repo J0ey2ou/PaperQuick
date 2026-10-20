@@ -152,7 +152,10 @@ class ReaderPage(ReaderWorkflow):
             if not attachment:raise ValueError('这篇文献尚未添加正文。请在“正文与附件”中添加 PDF 或 Word，并设为正文。')
             self.rid=rid;self.attachment_id=attachment['id'];self.source_path=self.directory/attachment['path'];self.path=None;self.page=0;self.count=0;self.generation+=1;self.loading=True;self.fit_pending=True;self.image_size=None
             self.document_canvas.reset()
-            if record_read:lib.save({'read_count':record.get('read_count',0)+1,'last_read':time.time()},rid=rid)
+            if record_read:
+                changes={'read_count':record.get('read_count',0)+1,'last_read':time.time()}
+                if record.get('status') in ('未读','待读'):changes['status']='在读'
+                lib.save(changes,rid=rid)
             self.title.set(display_name(record));self.notes.configure(state='normal');self.notes.delete('1.0','end');self.notes.insert('1.0',record.get('notes',''));self.notes.edit_reset();self.notes.edit_modified(False);self.dirty=False
             self.load_note_images(record)
             for tag,ranges in record.get('note_styles',{}).items():
@@ -522,7 +525,7 @@ class ReaderPage(ReaderWorkflow):
 
     @property
     def busy(self):
-        return self._import_busy or self.document_job or any(window and not window.closed and window.busy for window in (self.attachment_manager,self.conversion_window,*self.lookup_windows))
+        return self._import_busy or self.document_job or any(window and not window.closed and window.busy for window in (self.attachment_manager,self.conversion_window,getattr(self,'word_citations',None),*self.lookup_windows))
 
     def can_close(self):
         if self.editor_dirty:self.status.set('原文修改尚未保存，请先按 Ctrl+S 保存。');return False
@@ -618,7 +621,7 @@ class ReaderPage(ReaderWorkflow):
         if not self.can_close():return False
         self.save_notes();self.closed=True;self.generation+=1
         if getattr(self,'_chat_bridge',None):self._chat_bridge.close();self._chat_bridge=None
-        for window in (self.attachment_manager,self.conversion_window):
+        for window in (self.attachment_manager,self.conversion_window,getattr(self,'word_citations',None)):
             if window and not window.closed:window.close()
         if self.comparison:self.comparison.close();self.comparison=None
         for window in self.lookup_windows:

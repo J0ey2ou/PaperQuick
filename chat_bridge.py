@@ -39,7 +39,7 @@ class ChatBridge:
     def _library(self):
         return Library(self.directory)
 
-    def prepare(self, rid, quote='', image=None, page=0):
+    def prepare(self, rid, quote='', image=None, page=0, whole_document=False):
         if not quote.strip() and image is None:
             raise ValueError('请先选中文字，或使用“框选图片供 ChatGPT 讨论”。')
         if len(quote) > 100000:
@@ -78,7 +78,7 @@ class ChatBridge:
                         raise ValueError('选区图片过大，请缩小选框。')
                     files.append({'name': f'选区-第{page + 1}页.png', 'data': data,
                                   'size': len(data), 'primary': False})
-                prompt = f'文献：{display_name(record)}\n第 {page + 1} 页\n\n'
+                prompt = f'文献：{display_name(record)}\n' + ('通篇解读\n\n' if whole_document else f'第 {page + 1} 页\n\n')
                 prompt += quote.strip() if quote.strip() else '请结合文献讨论所附选区图片。'
                 token = secrets.token_urlsafe(32)
                 now = time.monotonic()

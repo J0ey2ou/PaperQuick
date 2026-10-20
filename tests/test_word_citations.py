@@ -192,6 +192,21 @@ class WordChangePlanningTests(unittest.TestCase):
     def test_label_uses_embedded_title(self):
         self.assertEqual(citation_label(citation('one', 10, PAPERS[0], PAPERS[1])), 'Alpha study; Beta study')
 
+    def test_first_citation_also_plans_a_complete_bibliography_at_document_end(self):
+        operations,_=self.plan(snapshot(cursor=5),'insert',[PAPERS[0]],locator='12–14')
+        self.assertEqual(operations['insert']['kind'],'citation')
+        self.assertEqual(operations['append_bibliography']['result_rtf'],'1. Alpha study')
+        self.assertEqual(operations['insert']['payload']['items'][0]['locator'],'12–14')
+
+    def test_refresh_repairs_missing_bibliography_and_option_can_disable_it(self):
+        snap=snapshot(citation('one',10,PAPERS[0]))
+        operations,_=self.plan(snap)
+        self.assertIn('append_bibliography',operations)
+        operations,_=self.plan(snap,auto_bibliography=False)
+        self.assertNotIn('append_bibliography',operations)
+        operations,_=self.plan(snapshot(citation('one',10,PAPERS[0]),bibliography()))
+        self.assertNotIn('append_bibliography',operations)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -89,7 +89,7 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
     await route.fulfill({contentType:'text/html',body:fixture({stripHash:mode==='stripped-hash',plainChip:mode==='plain-chip',noInput:mode==='drop',hiddenComposer:mode==='hidden-composer',remount:mode==='remount',nativeEditor:mode==='native-editor',rejectText:mode==='reject-text'})});
   });
   // Block all unrelated external requests; only fixture documents reach the bridge.
-  const handoff=await issue({image:true,local:['local-launch','no-extension','reuse'].includes(mode)});
+  const handoff=await issue({image:mode!=='whole-paper',whole:mode==='whole-paper',local:['local-launch','no-extension','reuse','whole-paper'].includes(mode)});
   const page=await context.newPage();await page.goto(handoff.url,{waitUntil:'commit'});
   if(mode==='no-extension'){
     await page.waitForSelector('#setup');
@@ -108,20 +108,26 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
     assert((await page.evaluate(()=>window.fixture.draft)).includes('Selected passage'));
     checks.push('Upload failure reports its cause while selected text remains in the input box');
   }else{
-  await page.waitForFunction(()=>window.fixture?.draft.includes('Selected passage'),{},{timeout:20000});
-  await page.waitForFunction(()=>window.fixture.uploads.length===2,{},{timeout:15000});
+  await page.waitForFunction(prompt=>window.fixture?.draft.replace(/\s+/g,' ').trim()===prompt.replace(/\s+/g,' ').trim(),handoff.prompt,{timeout:20000});
+  await page.waitForFunction(count=>window.fixture.uploads.length===count,handoff.files.length,{timeout:15000});
   const result=await page.evaluate(()=>window.fixture);
   assert.equal(result.sends,0);
   assert.equal(result.uploads[0].sha,handoff.sourceSha256);
   assert.equal(result.uploads[0].name,handoff.files[0].name);
-  assert.equal(result.uploads[1].name,handoff.files[1].name);
-  assert.equal(uploads.length,2);
+  if(handoff.files[1])assert.equal(result.uploads[1].name,handoff.files[1].name);
+  assert.equal(uploads.length,handoff.files.length);
   assert(uploads[0].includes(Buffer.from('%PDF-')));
   assert.equal(errors.length,0,errors.join('\n'));
   checks.push('Real MV3 worker fetches the Python bridge and transfers exact PDF bytes');
   checks.push('Real file input/drop sends document and image to the isolated upload fixture');
   checks.push('Selected text enters the browser contenteditable; no message is sent');
   await waitState('ready');
+  if(mode==='whole-paper'){
+    assert(result.draft.includes('通篇解读'));
+    assert(result.draft.includes('研究设计、数据或样本、关键方法'));
+    assert(!result.draft.includes('第 1 页'));
+    checks.push('The configurable Chinese whole-paper prompt and exact primary PDF reach the web composer without sending');
+  }
   if(['hidden-composer','remount','native-editor'].includes(mode)){
     await new Promise(resolve=>setTimeout(resolve,1400));
     assert((await page.locator('[contenteditable=true]').innerText()).includes('Selected passage'));
@@ -174,7 +180,14 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
   const report={passed:true,mode,headless:true,isolated_profile:true,user_profiles_accessed:false,checks};
   fs.writeFileSync(path.join(root,'build/chat-integration-'+mode+'-check.json'),JSON.stringify(report,null,2));
   console.log(JSON.stringify(report));
-})().catch(error=>{console.error(error.stack);process.exitCode=1;}).finally(async()=>{
+})().catch(async error=>{
+  console.error(error.stack);
+  if(context)for(const p of context.pages()){
+    try{console.error(JSON.stringify(await p.evaluate(()=>({url:location.origin+location.pathname,fixture:window.fixture,editor:document.querySelector('[contenteditable=true]')?.innerText}))))}catch(_){}
+  }
+  console.error(JSON.stringify(await issue({status:true})));
+  process.exitCode=1;
+}).finally(async()=>{
   if(context)await context.close();
   backend.stdin.end(JSON.stringify({stop:true})+'\n');
 });

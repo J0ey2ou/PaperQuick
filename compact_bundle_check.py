@@ -35,6 +35,19 @@ def run(root,report):
             lib=Library(folder/'本地文献库')
             assert lib.setting('reader_marker_size')==26 and lib.setting('research_note_template')=='Saved template'
             assert lib.get(rid)['notes']=='Retained notes';lib.close()
+            lib=Library(folder/'本地文献库')
+            try:
+                parent=lib.create_project('Research');child=lib.create_project('Methods',parent)
+                lib.set_project_rules(child,'method');lib.save({'tags':['method'],'rating':5},rid=rid)
+                assert lib.records(parent)[0]['id']==rid and lib.get(rid)['rating']==5
+            finally:lib.close()
+            assert instance.updater.status.get()
+            from chat_prompt_ui import render_chat_prompt,DEFAULT_CHAT_PROMPT
+            assert '《Fixture》' in render_chat_prompt(DEFAULT_CHAT_PROMPT,{'title':'Fixture'})
+            from word_citations import plan_changes
+            from citation_styles import format_document
+            operations,formatted=plan_changes({'fields':[],'selection':{'start':0,'end':0}},[{'id':'citation-fixture','title':'Fictional research','authors':'Alice Smith','year':'2025'}],'apa','insert',[{'id':'citation-fixture','title':'Fictional research','authors':'Alice Smith','year':'2025'}],locator='2–3')
+            assert operations['append_bibliography']['kind']=='bibliography' and 'Fictional research' in formatted['plain_bibliography']
             from chat_bridge import ChatBridge
             source=folder/'fixture.txt';source.write_text('Isolated ChatGPT bridge fixture',encoding='utf-8')
             lib=Library(folder/'本地文献库')
@@ -68,5 +81,5 @@ def run(root,report):
             assert converter_path().is_file() and bridge_path().is_file()
             instance.close()
     report.write_text(json.dumps({'passed':True,'version':VERSION,'project':PROJECT_URL,'frozen':bool(getattr(sys,'frozen',False)),
-        'checks':['single-row reader and comparison','toolbar icons bundled','automatic settings persistence','existing library and unknown preferences retained','Word helpers present','ChatGPT bridge bundled without browser launch','cross-page document crop contains both pages'],
+        'checks':['single-row reader and comparison','toolbar icons bundled','automatic settings persistence','existing library and unknown preferences retained','Word helpers present','ChatGPT bridge bundled without browser launch','cross-page document crop contains both pages','tags and nested projects','ratings persisted','whole-paper prompt template','Word CSL citation and automatic bibliography plan','settings updater bundled'],
         'background_only':True},ensure_ascii=False,indent=2),'utf-8')

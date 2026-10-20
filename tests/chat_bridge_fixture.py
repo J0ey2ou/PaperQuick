@@ -22,7 +22,10 @@ with tempfile.TemporaryDirectory(dir=folder) as temporary:
             if request.get('status'):
                 print(json.dumps(bridge.status(token)),flush=True);continue
             quote=request.get('quote','Selected passage from the local fixture paper.')
-            url=bridge.prepare(rid,quote=quote,image=Image.new('RGB',(36,24),'red') if request.get('image') else None)
+            if request.get('whole'):
+                from chat_prompt_ui import DEFAULT_CHAT_PROMPT,render_chat_prompt
+                quote=render_chat_prompt(DEFAULT_CHAT_PROMPT,lib.get(rid))
+            url=bridge.prepare(rid,quote=quote,image=Image.new('RGB',(36,24),'red') if request.get('image') else None,whole_document=bool(request.get('whole')))
             token=url.split('#paperquick=')[1].split('.',1)[1]
             files=bridge.payload(token)['files']
             print(json.dumps({'url':bridge.open_url(url) if request.get('local') else url,'files':files,'sourceSha256':hashlib.sha256(source.read_bytes()).hexdigest(),

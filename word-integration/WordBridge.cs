@@ -120,7 +120,7 @@ internal static class WordBridge {
         return Obj("document", Obj("name", S(document.Name), "full_name", S(document.FullName), "window", (int)window.Hwnd,
                     "read_only", (bool)document.ReadOnly, "protected", (int)document.ProtectionType != -1, "track_revisions", (bool)document.TrackRevisions),
                    "selection", Obj("start", (int)selection.Start, "end", (int)selection.End, "story_type", (int)selection.StoryType),
-                   "fields", fields, "fingerprint", Hash(fingerprint.ToString()));
+                   "fields", fields, "fingerprint", Hash(fingerprint.ToString()), "capabilities", new[] { "append_bibliography" });
     }
 
     static void Validate(Dictionary<string, object> expected, Dictionary<string, object> actual) {
@@ -145,6 +145,7 @@ internal static class WordBridge {
         public string Kind;
         public dynamic Field;
         public dynamic RichText;
+        public bool Append;
     }
 
     static Dictionary<string, object> Apply(dynamic app, Dictionary<string, object> expected, Dictionary<string, object> operations, string testFailure = null) {
@@ -165,7 +166,8 @@ internal static class WordBridge {
         var updates = L(V(operations, "updates"));
         var remove = L(V(operations, "remove"));
         var insert = V(operations, "insert") == null ? null : D(operations["insert"]);
-        Need(updates.Count + remove.Count + (insert == null ? 0 : 1) > 0, "没有需要更新的引用。");
+        var append = V(operations, "append_bibliography") == null ? null : D(operations["append_bibliography"]);
+        Need(updates.Count + remove.Count + (insert == null ? 0 : 1) + (append == null ? 0 : 1) > 0, "没有需要更新的引用。");
         var touched = new HashSet<string>(); var prepared = new List<Prepared>();
         foreach (object item in updates) {
             var op = D(item); string id = S(op["id"]);
@@ -194,6 +196,23 @@ internal static class WordBridge {
             Need(!existing.ContainsKey(S(payload["id"])), "这条引用已经插入，请重新选择插入操作。");
             prepared.Add(new Prepared { Operation = insert, Kind = kind });
         }
+        if (append != null) {
+            Need(S(append["kind"]) == "bibliography", "文末只能追加参考文献表。");
+            var payload = D(append["payload"]); Code("bibliography", payload);
+            Need(!existing.ContainsKey(S(payload["id"])), "参考文献表已存在，请重新读取文档。");
+            Need(!prepared.Any(p => p.Kind == "bibliography"), "已有参考文献表，请重新读取文档。");
+            foreach (object value in existing.Values) {
+                dynamic field = value;
+                Need(S(Parse(field)["kind"]) != "bibliography", "已有参考文献表，请更新现有列表。");
+            }
+            int end = (int)document.Content.End - 1;
+            CheckEditableControls(document, end, end);
+            for (int n = 1; n <= (int)allFields.Count; ++n) {
+                dynamic field = allFields[n];
+                Need(end < (int)field.Code.Start - 1 || end >= (int)field.Result.End + 1, "文末位于自动内容中，请在文末增加一个普通空段落后重试。");
+            }
+            prepared.Add(new Prepared { Operation = append, Kind = "bibliography", Append = true });
+        }
         string temporary = Path.Combine(Path.GetTempPath(), "PaperQuickWordRich-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temporary);
         var scratch = new List<object>();
@@ -221,7 +240,8 @@ internal static class WordBridge {
             // Recheck controls immediately before writing: they can be locked
             // while RTF preparation is in progress, without changing body text.
             foreach (var p in prepared) {
-                if ((object)p.Field == null) CheckEditableControls(document, (int)originalSelection.Start, (int)originalSelection.End);
+                if (p.Append) CheckEditableControls(document, (int)document.Content.End - 1, (int)document.Content.End - 1);
+                else if ((object)p.Field == null) CheckEditableControls(document, (int)originalSelection.Start, (int)originalSelection.End);
                 else CheckEditableControls(document, (int)p.Field.Code.Start - 1, (int)p.Field.Result.End + 1);
             }
             foreach (object id in remove) { dynamic field = existing[S(id)]; CheckEditableControls(document, (int)field.Code.Start - 1, (int)field.Result.End + 1); }
@@ -234,10 +254,15 @@ internal static class WordBridge {
                 changed = true;
                 if (testFailure == "before-write") throw new InvalidOperationException("Test: simulated failure before first COM write.");
                 if (field == null) {
-                    dynamic range = originalSelection.Duplicate; range.Collapse(1);
+                    dynamic range;
+                    if (p.Append) {
+                        int end = (int)document.Content.End - 1;
+                        document.Range(end, end).InsertBefore("\r"); undoableWrite = true;
+                        end = (int)document.Content.End - 1; range = document.Range(end, end);
+                    } else { range = originalSelection.Duplicate; range.Collapse(1); }
                     field = document.Fields.Add(range, 35, "\" \"", false);
                     undoableWrite = true;
-                    inserted = field;
+                    if (!p.Append) inserted = field;
                 }
                 field.Locked = false;
                 if (testFailure == "after-unlock") throw new InvalidOperationException("Test: simulated failure after changing field lock.");

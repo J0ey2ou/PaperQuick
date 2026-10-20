@@ -12,7 +12,7 @@ from ui_theme import FONT,style_dialog,apply_skin,CURRENT_SKIN
 
 
 class WordCitationsWindow:
-    def __init__(self,parent,directory,selected=None,on_library_changed=None):
+    def __init__(self,parent,directory,selected=None,on_library_changed=None,locator=''):
         self.directory=Path(directory);self.custom_dir=self.directory/'citation-styles';self.on_library_changed=on_library_changed
         self.win=tk.Toplevel(parent);self.win.title('Word 引用 · 文献直达');self.win.geometry('1060x810');self.win.minsize(940,700);self.win.transient(parent.winfo_toplevel());style_dialog(self.win)
         self.busy=False;self.closed=False;self.snapshot=None;self.events=queue.Queue();self.content_records={}
@@ -44,13 +44,15 @@ class WordCitationsWindow:
         ttk.Button(edits,text='查看格式预览',command=lambda:self.execute('document_preview')).pack(side='right')
         actions=ttk.Frame(frame);actions.grid(row=4,column=0,sticky='ew',pady=(14,8))
         self.insert_button=ttk.Button(actions,text='插入正文引文',style='Accent.TButton',command=lambda:self.execute('insert'));self.insert_button.pack(side='left')
-        ttk.Label(actions,text='引用页码（可选）').pack(side='left',padx=(14,8));self.locator=tk.StringVar();ttk.Entry(actions,textvariable=self.locator,width=11).pack(side='left')
+        ttk.Label(actions,text='引用页码（可选）').pack(side='left',padx=(14,8));self.locator=tk.StringVar(value=locator);ttk.Entry(actions,textvariable=self.locator,width=11).pack(side='left')
         ttk.Button(actions,text='编辑文献信息',command=self.edit_metadata).pack(side='right');ttk.Button(actions,text='按 DOI 补全信息',command=self.enrich).pack(side='right',padx=8)
         actions=ttk.Frame(frame);actions.grid(row=5,column=0,sticky='ew')
         ttk.Button(actions,text='生成 / 更新参考文献表',command=lambda:self.execute('bibliography')).pack(side='left')
         ttk.Button(actions,text='更新全部引用 / 切换格式',command=lambda:self.execute('refresh')).pack(side='left',padx=8)
         ttk.Button(actions,text='预览所选文献',command=lambda:self.execute('preview')).pack(side='right')
-        self.status=tk.StringVar(value='参考文献表插在 Word 光标处。移动或删除正文引文后，点“更新全部引用”整理编号。')
+        self.auto_bibliography=tk.BooleanVar(value=True)
+        ttk.Checkbutton(actions,text='自动补齐文末参考文献',variable=self.auto_bibliography).pack(side='left')
+        self.status=tk.StringVar(value='默认在插入正文引文时同步生成文末参考文献；已有列表会更新，不重复添加。')
         ttk.Label(frame,textvariable=self.status,style='Muted.TLabel',wraplength=980).grid(row=6,column=0,sticky='ew',pady=(12,0))
         credit=ttk.Label(frame,text='citeproc-js implements the Citation Style Language · © Frank Bennett  ↗',style='Muted.TLabel',cursor='hand2')
         credit.grid(row=7,column=0,sticky='w',pady=(8,0));credit.bind('<Button-1>',lambda _:webbrowser.open('https://citationstyles.org/'))
@@ -127,7 +129,7 @@ class WordCitationsWindow:
         if action!='preview' and self.snapshot is None:self.status.set('先打开 Word 文档，再点击“连接 / 重新读取 Word”。');return
         selected=self.selected_records();target=self.doc_tree.selection();target_id=target[0] if target else None;locator=self.locator.get()
         if action=='remove' and target_id and not messagebox.askyesno('删除这处引文','删除所选正文引文，并更新其余编号和参考文献表？可以在 Word 中撤销。',parent=self.win):return
-        expected=self.snapshot;records=list(self.records);style_id=style['id']
+        expected=self.snapshot;records=list(self.records);style_id=style['id'];auto_bibliography=self.auto_bibliography.get()
         def work():
             if action=='preview':
                 snapshot={'fields':[],'selection':{'start':0,'end':0}};_,formatted=plan_changes(snapshot,records,style_id,'insert',selected,locator=locator,custom_dir=self.custom_dir);return formatted
@@ -136,7 +138,7 @@ class WordCitationsWindow:
                 _,formatted=plan_changes(expected,records,style_id,'refresh',custom_dir=self.custom_dir);return formatted
             fresh=word_bridge.snapshot()
             if fresh['document']!=expected['document']:raise ValueError('Word 当前显示的文档已改变。请重新连接，确认文档名称后再插入。')
-            operations,formatted=plan_changes(fresh,records,style_id,action,selected,target_id,locator,custom_dir=self.custom_dir)
+            operations,formatted=plan_changes(fresh,records,style_id,action,selected,target_id,locator,custom_dir=self.custom_dir,auto_bibliography=auto_bibliography)
             result=word_bridge.apply(fresh,operations)
             try:self._library(lambda lib:lib.set_setting('word_citation_style',style_id))
             except Exception:result['_preference_warning']=True

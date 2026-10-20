@@ -7,6 +7,36 @@ import uuid
 
 
 class LibraryWorkflow:
+    def merge_annotations(self, rid, annotations, known_ids=()):
+        """Apply local edits while retaining replies arriving from another connection."""
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            row=self.db.execute('SELECT data FROM papers WHERE id=?',(rid,)).fetchone()
+            if not row:raise ValueError('文献不存在。')
+            data=json.loads(row[0]);incoming={a['id']:a for a in annotations};known=set(known_ids)
+            merged=[a for a in data.get('annotations',[]) if a['id'] not in known and a['id'] not in incoming]
+            merged.extend(annotations);data['annotations']=merged
+            self.db.execute('UPDATE papers SET data=?,updated=? WHERE id=?',(json.dumps(data,ensure_ascii=False),time.time(),rid))
+        return merged
+
+    def append_chat_reply(self,rid,attachment,anchor,text,url,message_id):
+        import hashlib
+        key=hashlib.sha256((url+'\n'+message_id+'\n'+text).encode()).hexdigest()
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            row=self.db.execute('SELECT data FROM papers WHERE id=?',(rid,)).fetchone()
+            if not row:raise ValueError('文献已被删除，无法回存批注。')
+            if not self.db.execute('SELECT 1 FROM attachments WHERE paper=? AND id=?',(rid,attachment)).fetchone():raise ValueError('对应正文已移除，请重新连接。')
+            data=json.loads(row[0]);annotations=data.get('annotations',[])
+            existing=next((a for a in annotations if a.get('chat_reply_key')==key),None)
+            if existing:return {'ok':True,'annotation_id':existing['id'],'duplicate':True}
+            item={'id':uuid.uuid4().hex,'attachment':attachment,'page':anchor['page'],'rect':anchor['rect'],
+                  'kind':'ChatGPT 批注','text':text,'quote':anchor.get('quote',''),'color':'#538a76',
+                  'created':time.time(),'chat_url':url,'chat_reply_key':key}
+            annotations.append(item);data['annotations']=annotations
+            self.db.execute('UPDATE papers SET data=?,updated=? WHERE id=?',(json.dumps(data,ensure_ascii=False),time.time(),rid))
+        return {'ok':True,'annotation_id':item['id'],'duplicate':False}
+
     def workflow_schema(self):
         self.db.executescript('''
         CREATE TABLE IF NOT EXISTS import_batches(id TEXT PRIMARY KEY,at REAL,project TEXT,state TEXT,data TEXT);
@@ -24,28 +54,41 @@ class LibraryWorkflow:
                 'attachments':[dict(r) for r in self.db.execute('SELECT * FROM attachments WHERE paper=?',(rid,))],
                 'tag_memberships':[dict(r) for r in self.db.execute('SELECT * FROM tag_memberships WHERE paper=?',(rid,))]}
 
-    def import_batch(self, paths, project):
+    def import_batch(self, paths, project, progress=None):
         """Journal each selected file; undo never overwrites subsequently edited papers."""
         self.project(project)
-        batch=uuid.uuid4().hex;entries=[];errors=[]
+        paths=list(paths);batch=uuid.uuid4().hex;entries=[];errors=[];paper_ids=[];details=[]
         with self.db:self.db.execute('INSERT INTO import_batches VALUES(?,?,?,?,?)',(batch,time.time(),project,'running','[]'))
-        before={r['id']:self._snapshot(r['id']) for r in self.db.execute('SELECT id FROM papers')}
-        for path in paths:
+        before={}
+        def observe(rid):
+            if rid and rid not in before:before[rid]=self._snapshot(rid) if rid in existing_ids else None
+        self._import_observer=observe
+        for index,path in enumerate(paths):
+            started=time.perf_counter()
+            existing_ids={r[0] for r in self.db.execute('SELECT id FROM papers')}
             try:
                 rid=self.import_document(path,project)
+                paper_ids.append(rid)
                 after=self._snapshot(rid);entries.append({'source':str(path),'id':rid,'before':before.get(rid),'after':after});before[rid]=after
+                details.append({'source':str(path),'state':'linked' if rid in existing_ids else 'imported','id':rid})
             except Exception as exc:
                 errors.append(f'{Path(path).name}：{exc}')
+                details.append({'source':str(path),'state':'error','error':str(exc) or type(exc).__name__})
                 # A failed file may have created a metadata-only entry; journal it too.
                 for row in self.db.execute('SELECT id FROM papers').fetchall():
-                    if row['id'] not in before:
+                    if row['id'] not in existing_ids:
                         after=self._snapshot(row['id']);entries.append({'source':str(path),'id':row['id'],'before':None,'after':after});before[row['id']]=after
-                    else:
+                    elif row['id'] in before:
                         after=self._snapshot(row['id'])
                         if after!=before[row['id']]:entries.append({'source':str(path),'id':row['id'],'before':before[row['id']],'after':after});before[row['id']]=after
             with self.db:self.db.execute('UPDATE import_batches SET data=? WHERE id=?',(json.dumps(entries,ensure_ascii=False),batch))
+            details[-1]['seconds']=round(time.perf_counter()-started,3)
+            if progress:progress(index+1,len(paths),Path(path).name)
+        self._import_observer=None
+        self.set_setting('last_import_report',{'batch':batch,'files':details,'finished':time.time()})
         with self.db:self.db.execute("UPDATE import_batches SET state='ready' WHERE id=?",(batch,))
         return {'batch':batch,'count':len(paths)-len(errors),'errors':errors,
+                'paper_ids':list(dict.fromkeys(paper_ids)),'details':details,
                 'new_paper_ids':list(dict.fromkeys(e['id'] for e in entries if e['before'] is None and e['after']['attachments']))}
 
     def latest_import(self):

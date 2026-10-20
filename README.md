@@ -1,6 +1,6 @@
 # 文献直达 · PaperQuick
 
-**v3.5.1**：新增文献标签、子课题与标签自动归类、阅读状态和星级评分；Word 插入引文时默认补齐文末参考文献，阅读页支持带页码引用。通篇解读使用可自定义的 ChatGPT 网页 Prompt 模板。设置中可检查、下载并在正常退出后安装后续更新；正式版使用公开更新清单，避免匿名 API 限流。[更新与使用说明](docs/v3.5-upgrade.md)。
+**v3.6.0**：ChatGPT 回复可一键回存原讨论页批注；支持跨 PDF 的具体位置链接与带批注 PDF 副本导出。重新调整书页主题、标题栏筛选、高 DPI 表头和滚动，新增已有标签选择、全库重命名与删除。修复阅读页导入后列表不刷新，增加逐文件导入结果和进度，并优化列表查询及搜索响应。[本版使用与升级说明](docs/v3.6-upgrade.md)。设置内“检查更新”持续连接最新正式版。
 
 **v3.4.1 预览**：新增 ChatGPT 阅读互动，修复矩形选框、跨页选词截图遗漏后续页面及长图保存。[下载 Windows 预览包](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.4.1/PaperQuick-v3.4.1-Windows.zip) · [预览版说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.4.1) · [ChatGPT 接入步骤](docs/chatgpt-reading.md)。网页自动上传仍需在真实账号环境验证。
 

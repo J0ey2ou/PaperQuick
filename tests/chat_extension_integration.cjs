@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const {spawn} = require('node:child_process');
 const readline = require('node:readline');
-const {chromium} = require('playwright');
+const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(__dirname, '..');
 const pending = [];
 const backend = spawn(process.env.PYTHON || 'python', ['-u', path.join(__dirname, 'chat_bridge_fixture.py')], {cwd:root,windowsHide:true,stdio:['pipe','pipe','pipe']});
@@ -161,6 +161,22 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
       assert.equal((await page.evaluate(()=>window.fixture)).uploads.length,2);
       checks.push('An empty composer releases the stale lock; retry routes back to the original tab');
     }
+  }
+  if(mode==='reply'){
+    await page.evaluate(()=>window.sendFixture());await waitState('bound');
+    await page.evaluate(()=>{
+      const assistant=document.createElement('article');assistant.setAttribute('data-message-author-role','assistant');assistant.setAttribute('data-message-id','reply-1');
+      assistant.innerHTML='<div class="markdown"><p>Method explanation from the isolated fixture.</p><p>第二段解释。</p></div>';
+      document.querySelector('main').append(assistant);
+    });
+    await page.waitForSelector('[data-paperquick-reply]');
+    await page.locator('[data-paperquick-reply]').evaluate(button=>button.dispatchEvent(new Event('click')));
+    await page.waitForFunction(()=>document.querySelector('[data-paperquick-reply]')?.textContent==='已保存到文献批注');
+    const annotations=await issue({annotations:true});assert.equal(annotations.length,1);
+    assert.equal(annotations[0].kind,'ChatGPT 批注');assert(annotations[0].text.includes('Method explanation'));
+    assert(annotations[0].text.includes('第二段解释'));assert.equal(annotations[0].page,0);
+    assert.equal((await page.evaluate(()=>window.fixture)).sends,1);
+    checks.push('A real extension return button saves only the selected assistant reply through HTTP into the originating local PDF annotation');
   }
   if(mode==='reuse'){
     await page.evaluate(()=>window.sendFixture());

@@ -61,6 +61,30 @@ def run(root,report):
                 assert bridge.open_url(url).startswith('http://127.0.0.1:')
                 assert b'paperquick-handoff' in bridge.connection_page(token)
             finally:bridge.close()
+            # Exercise the installed worker/UI import path, including failures and
+            # repeated imports. An exception must not silently stop queue polling.
+            instance.open_library();library_window=instance.library_window
+            valid=folder/'worker.txt';valid.write_text('Frozen worker import fixture','utf-8')
+            invalid=folder/'bad.pdf';invalid.write_text('<html>not a PDF</html>','utf-8')
+            import time
+            with patch.object(library_window,'chat_full_paper'),patch('library_ui.messagebox.showwarning'):
+                pid=library_window.library.projects()[0]['id']
+                for selected_files in ([invalid,valid],[valid]):
+                    library_window.batch_import(selected_files,pid)
+                    deadline=time.monotonic()+12
+                    while library_window.busy and time.monotonic()<deadline:root.update();time.sleep(.02)
+                    assert not library_window.busy
+                    assert library_window.tree.selection()
+                imported=library_window.library.get(library_window.tree.selection()[0])
+                assert imported['attachments']
+            reader=instance.reader_page
+            reader.events.put(('open',0,imported['id']));reader.poll()
+            assert library_window.tree.exists(imported['id'])
+            # Frozen imports must discover the PDF export/link and tag modules.
+            from annotation_export import export_pdf
+            from document_links import destination
+            from tag_ui import tag_picker
+            assert callable(export_pdf) and callable(destination) and callable(tag_picker)
             from pypdf import PdfWriter
             from pypdf.generic import DecodedStreamObject,NameObject
             writer=PdfWriter()

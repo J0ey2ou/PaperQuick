@@ -19,6 +19,8 @@ with tempfile.TemporaryDirectory(dir=folder) as temporary:
         for line in sys.stdin:
             request=json.loads(line)
             if request.get('stop'):break
+            if request.get('annotations'):
+                print(json.dumps(lib.get(rid).get('annotations',[])),flush=True);continue
             if request.get('status'):
                 print(json.dumps(bridge.status(token)),flush=True);continue
             quote=request.get('quote','Selected passage from the local fixture paper.')

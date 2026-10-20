@@ -13,3 +13,4 @@
 - 正式发布必须额外上传 `scripts/package_release.py` 生成的 `update.json`；正式版客户端优先从 `releases/latest/download/update.json` 检查，以免 GitHub 匿名 API 限流导致更新入口不可用。发布后用真实客户端检查逻辑验证公开清单可读、版本和安装包 SHA256 正确，再结束发布工作。
 - 自动更新仅在正常退出后安装；不得强制关闭程序、选词助手或 Word。替换失败回滚，保留文献库和设置。只做后台及隐藏/隔离验证。
 - 源码提交与安装包发布不等于授权合并主分支；沿用已授权范围。
+- 主分支要求验证签名。通过 GitHub 接口发布源码时使用 GraphQL `createCommitOnBranch`，检查提交 `verification.verified=true` 且远端 tree 与本地暂存 tree 一致后再创建 PR；不要再用未签名的 Git Database commit 发布，不得关闭保护规则。

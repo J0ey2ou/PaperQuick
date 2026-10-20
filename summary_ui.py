@@ -28,11 +28,12 @@ class SummaryView:
         self.project=tk.StringVar(value='全部课题');self.projects={}
         self.project_box=ttk.Combobox(header,textvariable=self.project,state='readonly',width=22);self.project_box.pack(side='right');self.project_box.bind('<<ComboboxSelected>>',lambda _:self.refresh())
         self.tabs=ttk.Notebook(self.frame);self.tabs.grid(row=1,column=0,sticky='nsew')
-        self.review=ttk.Frame(self.tabs,padding=(0,16));self.topics_page=ttk.Frame(self.tabs,padding=(0,16));self.watch=ttk.Frame(self.tabs,padding=(0,16))
-        self.tabs.add(self.review,text='阅读回顾');self.tabs.add(self.topics_page,text='主题与检索')
+        from ui_widgets import scrollable_page
+        review_host,self.review=scrollable_page(self.tabs);topics_host,self.topics_page=scrollable_page(self.tabs);watch_host,self.watch=scrollable_page(self.tabs)
+        self.tabs.add(review_host,text='阅读回顾');self.tabs.add(topics_host,text='主题与检索')
         from citation_ui import CitationView
         self.citations=CitationView(self.tabs,directory,on_query=on_query,on_collected=self._collection_changed)
-        self.tabs.add(self.citations.frame,text='引用与被引');self.tabs.add(self.watch,text='主题追踪')
+        self.tabs.add(self.citations.frame,text='引用与被引');self.tabs.add(watch_host,text='主题追踪')
         self._build_review();self._build_topics();self._build_watch()
         self.footer=tk.StringVar(value='阅读与主题整理保存在这台电脑上。')
         ttk.Label(self.frame,textvariable=self.footer,style='Muted.TLabel',wraplength=960).grid(row=2,column=0,sticky='w',pady=(8,0))

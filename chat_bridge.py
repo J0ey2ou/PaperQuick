@@ -16,6 +16,7 @@ from library_core import Library, digest, display_name
 MAX_FILE = 24 * 1024 * 1024
 CHUNK = 384 * 1024
 TTL = 30 * 60
+REPLY_TTL = 24 * 60 * 60
 
 
 def conversation_url(value):
@@ -34,12 +35,13 @@ class ChatBridge:
         self.directory = Path(directory).resolve()
         self.lock = threading.RLock()
         self.requests = {}
+        self.reply_sessions = {}
         self.server = None
 
     def _library(self):
         return Library(self.directory)
 
-    def prepare(self, rid, quote='', image=None, page=0, whole_document=False):
+    def prepare(self, rid, quote='', image=None, page=0, whole_document=False, anchor=None):
         if not quote.strip() and image is None:
             raise ValueError('请先选中文字，或使用“框选图片供 ChatGPT 讨论”。')
         if len(quote) > 100000:
@@ -85,6 +87,14 @@ class ChatBridge:
                 self.requests = {k: v for k, v in self.requests.items() if now - v['created'] < TTL and not v.get('completed')}
                 if len(self.requests) >= 16:
                     raise ValueError('待处理选区过多，请先完成已打开的 ChatGPT 对话。')
+                anchor=anchor or {'page':page,'rect':[.06,.06,.06,.06],'quote':quote[:10000]}
+                rect=anchor.get('rect',[.06,.06,.06,.06])
+                if len(rect)!=4 or any(not isinstance(v,(int,float)) or not 0<=v<=1 for v in rect):raise ValueError('选区位置无效。')
+                if not isinstance(page,int) or not 0<=page<100000:raise ValueError('选区页码无效。')
+                self.reply_sessions={k:v for k,v in self.reply_sessions.items() if now-v['created']<REPLY_TTL}
+                if len(self.reply_sessions)>=64:raise ValueError('回存连接过多，请重新启动软件后重试。')
+                self.reply_sessions[token]={'rid':rid,'attachment':attachment['id'],'attachment_sha':attachment['sha'],'created':now,'url':target,
+                    'anchor':{'page':page,'rect':list(rect),'quote':str(anchor.get('quote',quote))[:10000]}}
                 self.requests[token] = {'rid': rid, 'key': namespace + ':' + rid,
                                         'url': target, 'prompt': prompt, 'files': files,
                                         'created': now, 'fingerprint': fingerprint,
@@ -199,6 +209,7 @@ class ChatBridge:
                 lib.set_setting('chatgpt:' + item['rid'], saved)
                 for pending in self.requests.values():
                     if pending['rid'] == item['rid']:pending['url'] = url
+                self.reply_sessions[token]['url']=url
                 item['completed'] = True
                 item['state']='bound'
             finally:
@@ -213,6 +224,23 @@ class ChatBridge:
             finally:
                 lib.close()
             self.requests = {k: v for k, v in self.requests.items() if v['rid'] != rid}
+            self.reply_sessions={k:v for k,v in self.reply_sessions.items() if v['rid']!=rid}
+
+    def reply(self,token,url,text,message_id=''):
+        url=conversation_url(url)
+        if not url or not isinstance(text,str) or not text.strip() or len(text)>100000:raise ValueError('回复内容或对话地址无效。')
+        if not isinstance(message_id,str) or len(message_id)>200:raise ValueError('回复标识无效。')
+        with self.lock:
+            session=self.reply_sessions.get(token)
+            if not session or time.monotonic()-session['created']>=REPLY_TTL:raise ValueError('回存连接已过期，请回阅读器重新连接 ChatGPT。')
+            lib=self._library()
+            try:
+                saved=lib.setting('chatgpt:'+session['rid'],{})
+                if url!=session['url'] or conversation_url(saved.get('url',''))!=url:raise ValueError('该对话与文献不匹配，请重新连接。')
+                attachment=next((a for a in lib.get(session['rid'])['attachments'] if a['id']==session['attachment']),None)
+                if not attachment or attachment['sha']!=session['attachment_sha']:raise ValueError('文献正文已改变，请重新连接以确认批注位置。')
+                return lib.append_chat_reply(session['rid'],session['attachment'],session['anchor'],text.strip(),url,message_id)
+            finally:lib.close()
 
     def _start(self):
         if self.server:
@@ -238,7 +266,7 @@ class ChatBridge:
                         (origin and not re.fullmatch(r'chrome-extension://[a-p]{32}', origin))):
                     self.send_error(403)
                     return
-                match = re.fullmatch(r'/handoff/([A-Za-z0-9_-]{43})(?:/file/(\d+)/(\d+)|/bind|/status)?', self.path)
+                match = re.fullmatch(r'/handoff/([A-Za-z0-9_-]{43})(?:/file/(\d+)/(\d+)|/bind|/status|/reply)?', self.path)
                 if not match:
                     self.send_error(404)
                     return
@@ -260,6 +288,10 @@ class ChatBridge:
                         length=int(self.headers.get('Content-Length','0'))
                         if not 0<length<=4096:raise ValueError('无效请求。')
                         body=json.loads(self.rfile.read(length));result=bridge.update_status(token,body['state'],body.get('detail',''))
+                    elif self.command=='POST' and self.path.endswith('/reply'):
+                        length=int(self.headers.get('Content-Length','0'))
+                        if not 0<length<=420000:raise ValueError('回复过长。')
+                        body=json.loads(self.rfile.read(length));result=bridge.reply(token,body['url'],body['text'],body.get('messageId',''))
                     else:
                         raise ValueError('无效请求。')
                     status = 200
@@ -285,6 +317,7 @@ class ChatBridge:
         with self.lock:
             server, self.server = self.server, None
             self.requests.clear()
+            self.reply_sessions.clear()
         if server:
             server.shutdown()
             server.server_close()

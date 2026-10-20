@@ -128,6 +128,8 @@ class App:
         menu.add_command(label="粘贴并查找", command=self.paste_search)
         self.input.bind("<Button-3>", lambda event: menu.tk_popup(event.x_root, event.y_root))
         root.protocol('WM_DELETE_WINDOW',self.close)
+        from update_ui import UpdateController
+        self.updater=UpdateController(root,app_dir(),self.config_path,self.status.set)
 
     def search_selection(self):
         if self.busy:
@@ -583,6 +585,8 @@ class App:
         finally:library.close()
         ttk.Separator(panel).pack(fill='x',pady=18)
         ttk.Label(panel,text='阅读与笔记',font=(FONT,12,'bold')).pack(anchor='w')
+        from chat_prompt_ui import ChatPromptDialog
+        ttk.Button(panel,text='编辑 ChatGPT 通篇解读模板',command=lambda:ChatPromptDialog(self.root,self.library_directory)).pack(anchor='w',pady=8)
         ttk.Checkbutton(panel,text='连续阅读，向下滚动即可接着看下一页',variable=continuous).pack(anchor='w',pady=10)
         row=ttk.Frame(panel);row.pack(fill='x');ttk.Label(row,text='页内笔记 / 链接标记大小（8–48）').pack(side='left');ttk.Spinbox(row,from_=8,to=48,width=7,textvariable=marker_size).pack(side='left',padx=12)
         ttk.Label(panel,text='自定义研究笔记模板',font=(FONT,11,'bold')).pack(anchor='w',pady=(18,6))
@@ -646,6 +650,7 @@ class App:
         from app_version import VERSION,PROJECT_URL,DEVELOPER
         ttk.Separator(panel).pack(fill='x',pady=18)
         ttk.Label(panel,text='关于文献直达',font=(FONT,12,'bold')).pack(anchor='w')
+        self.updater.mount(panel)
         ttk.Label(panel,text=f'版本  {VERSION}   ·   开发者  {DEVELOPER}',style='Muted.TLabel').pack(anchor='w',pady=8)
         ttk.Label(panel,text=PROJECT_URL,style='Muted.TLabel').pack(anchor='w')
         ttk.Button(panel,text='打开开发者项目',command=lambda:webbrowser.open(PROJECT_URL)).pack(anchor='w',pady=8)
@@ -654,6 +659,9 @@ class App:
 
 
 def main():
+    if len(sys.argv)==3 and sys.argv[1]=='--apply-update':
+        from app_updates import installer_main
+        installer_main(sys.argv[2]);return
     instance=None
     if os.name=='nt' and not any(arg.startswith('--verify-') for arg in sys.argv):
         from desktop_runtime import Instance

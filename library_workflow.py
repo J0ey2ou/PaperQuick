@@ -21,7 +21,8 @@ class LibraryWorkflow:
         row=self.db.execute('SELECT * FROM papers WHERE id=?',(rid,)).fetchone()
         if not row:return None
         return {'paper':dict(row),'memberships':[dict(r) for r in self.db.execute('SELECT * FROM memberships WHERE paper=?',(rid,))],
-                'attachments':[dict(r) for r in self.db.execute('SELECT * FROM attachments WHERE paper=?',(rid,))]}
+                'attachments':[dict(r) for r in self.db.execute('SELECT * FROM attachments WHERE paper=?',(rid,))],
+                'tag_memberships':[dict(r) for r in self.db.execute('SELECT * FROM tag_memberships WHERE paper=?',(rid,))]}
 
     def import_batch(self, paths, project):
         """Journal each selected file; undo never overwrites subsequently edited papers."""
@@ -44,7 +45,8 @@ class LibraryWorkflow:
                         if after!=before[row['id']]:entries.append({'source':str(path),'id':row['id'],'before':before[row['id']],'after':after});before[row['id']]=after
             with self.db:self.db.execute('UPDATE import_batches SET data=? WHERE id=?',(json.dumps(entries,ensure_ascii=False),batch))
         with self.db:self.db.execute("UPDATE import_batches SET state='ready' WHERE id=?",(batch,))
-        return {'batch':batch,'count':len(paths)-len(errors),'errors':errors}
+        return {'batch':batch,'count':len(paths)-len(errors),'errors':errors,
+                'new_paper_ids':list(dict.fromkeys(e['id'] for e in entries if e['before'] is None and e['after']['attachments']))}
 
     def latest_import(self):
         row=self.db.execute("SELECT * FROM import_batches WHERE state IN ('ready','running') ORDER BY at DESC LIMIT 1").fetchone()
@@ -84,7 +86,7 @@ class LibraryWorkflow:
             rid=entry['id'];current=self._snapshot(rid)
             if rid in kept:continue
             if current is None:continue
-            comparable=lambda x:{k:v for k,v in x.items() if k!='paper'}|{'paper':{k:v for k,v in x['paper'].items() if k!='updated'}}
+            comparable=lambda x:{k:v for k,v in x.items() if k!='paper'}|{'tag_memberships':x.get('tag_memberships',[]),'paper':{k:v for k,v in x['paper'].items() if k!='updated'}}
             from library_core import digest
             files_changed=any(a.get('sha') and self._managed_path(a['path']).is_file() and digest(self._managed_path(a['path']))!=a['sha'] for a in current['attachments'])
             if comparable(current)!=comparable(entry['after']) or files_changed:kept.add(rid);continue
@@ -93,11 +95,12 @@ class LibraryWorkflow:
             moved=self._move_to_trash(added,'import-'+row['id']+'-'+uuid.uuid4().hex[:8])
             try:
                 with self.db:
-                    self.db.execute('DELETE FROM attachments WHERE paper=?',(rid,));self.db.execute('DELETE FROM memberships WHERE paper=?',(rid,))
+                    self.db.execute('DELETE FROM attachments WHERE paper=?',(rid,));self.db.execute('DELETE FROM memberships WHERE paper=?',(rid,));self.db.execute('DELETE FROM tag_memberships WHERE paper=?',(rid,))
                     if old:
                         p=old['paper'];self.db.execute('UPDATE papers SET data=?,primary_project=?,updated=? WHERE id=?',(p['data'],p['primary_project'],time.time(),rid))
                         for a in old['attachments']:self._insert_row('attachments',a)
                         for m in old['memberships']:self._insert_row('memberships',m)
+                        for m in old.get('tag_memberships',[]):self._insert_row('tag_memberships',m)
                     else:
                         self.db.execute('DELETE FROM papers WHERE id=?',(rid,));self.db.execute('DELETE FROM sync_map WHERE paper=?',(rid,))
                     self.log('undo-import',{'batch':row['id'],'paper':rid})
@@ -127,7 +130,7 @@ class LibraryWorkflow:
                 self.db.execute('INSERT INTO paper_trash VALUES(?,?,?,?)',(token,time.time(),'removed',json.dumps(items,ensure_ascii=False)))
                 for x in items:
                     rid=x['paper']['id']
-                    for table in ('attachments','memberships','sync_map','reading_sessions'):self.db.execute('DELETE FROM '+table+' WHERE paper=?',(rid,))
+                    for table in ('attachments','memberships','tag_memberships','sync_map','reading_sessions'):self.db.execute('DELETE FROM '+table+' WHERE paper=?',(rid,))
                     self.db.execute('DELETE FROM paper_relations WHERE source=? OR target=?',(rid,rid));self.db.execute('DELETE FROM papers WHERE id=?',(rid,))
                 self.log('remove-papers',{'trash':token,'papers':[x['paper']['id'] for x in items]})
         except Exception:self._restore_moves(moved);raise
@@ -151,6 +154,7 @@ class LibraryWorkflow:
                     self._insert_row('papers',x['paper'])
                     for table,key in [('memberships','memberships'),('attachments','attachments'),('reading_sessions','sessions'),('sync_map','sync')]:
                         for data in x[key]:self._insert_row(table,data)
+                    for data in x.get('tag_memberships',[]):self._insert_row('tag_memberships',data)
                     for data in x['relations']:
                         if not self.db.execute('SELECT 1 FROM paper_relations WHERE id=?',(data['id'],)).fetchone():self._insert_row('paper_relations',data)
                 self.db.execute("UPDATE paper_trash SET state='restored' WHERE id=?",(row['id'],))

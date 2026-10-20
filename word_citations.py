@@ -9,7 +9,7 @@ def citation_label(field):
     return '; '.join(item.get('itemData',{}).get('title',item.get('id','未命名')) for item in items)
 
 
-def plan_changes(snapshot,records,style_id,action='refresh',selected=None,target_id=None,locator='',formatter=None,custom_dir=None):
+def plan_changes(snapshot,records,style_id,action='refresh',selected=None,target_id=None,locator='',formatter=None,custom_dir=None,auto_bibliography=True):
     """Create only PaperQuick field changes; document order determines numbering."""
     if formatter is None:
         from citation_styles import format_document
@@ -78,4 +78,7 @@ def plan_changes(snapshot,records,style_id,action='refresh',selected=None,target
         if any(f['start']<=point<f['end'] for f in fields):raise ValueError('请将 Word 光标移到正文引文之外，作为参考文献表的位置。')
         payload={'version':1,'id':uuid.uuid4().hex,'style_id':style_id}
         operations['insert']={'kind':'bibliography','id':payload['id'],'payload':payload,'result_rtf':formatted['bibliography']}
+    elif auto_bibliography and citations and not bibliographies:
+        payload={'version':1,'id':uuid.uuid4().hex,'style_id':style_id}
+        operations['append_bibliography']={'kind':'bibliography','id':payload['id'],'payload':payload,'result_rtf':formatted['bibliography']}
     return operations,formatted

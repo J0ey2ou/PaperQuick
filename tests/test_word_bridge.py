@@ -55,6 +55,12 @@ class WordTransportTests(unittest.TestCase):
         with patch.object(word_bridge.sys, '_MEIPASS', 'D:/bundle', create=True):
             self.assertEqual(word_bridge.bridge_path(), Path('D:/bundle/word-integration/WordBridge.exe'))
 
+    def test_old_helper_cannot_silently_ignore_automatic_bibliography(self):
+        with patch('word_bridge._call') as call:
+            with self.assertRaisesRegex(word_bridge.WordBridgeError,'组件版本较旧'):
+                word_bridge.apply({}, {'append_bibliography':{'kind':'bibliography'}})
+            call.assert_not_called()
+
     @unittest.skipUnless(os.name == 'nt' and os.environ.get('PAPERQUICK_WORD_INTEGRATION_TEST') == '1', 'Explicit isolated Word integration test')
     def test_real_word_owns_only_unsaved_test_document(self):
         result = word_bridge.isolated_selftest()
@@ -92,6 +98,8 @@ class WordTransportTests(unittest.TestCase):
                     new = operations.get('insert')
                     if new:
                         fields.append({'id': new['payload']['id'], 'kind': new['kind'], 'payload': deepcopy(new['payload']), 'start': point})
+                    appended=operations.get('append_bibliography')
+                    if appended:fields.append({'id':appended['payload']['id'],'kind':'bibliography','payload':deepcopy(appended['payload']),'start':max([f['start'] for f in fields]+[0])+100})
                     fields.sort(key=lambda f: f['start'])
                     for index, field in enumerate(fields):
                         field.update(start=(index+1)*100, end=(index+1)*100+50)

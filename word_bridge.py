@@ -62,6 +62,8 @@ def apply(snapshot, operations):
     remove=[field_id]. Result is a fresh snapshot. Insertion requires a collapsed
     cursor outside any existing field; only main document text is supported.
     """
+    if operations.get('append_bibliography') and 'append_bibliography' not in snapshot.get('capabilities', []):
+        raise WordBridgeError('Word 引用组件版本较旧，请更新完整安装包后重新连接 Word，以同步生成文末参考文献表。')
     return _call({'action': 'apply', 'snapshot': snapshot, 'operations': operations})
 
 

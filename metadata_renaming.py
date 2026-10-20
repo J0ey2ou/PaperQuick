@@ -212,7 +212,7 @@ def prepare_renames(library, ids):
                 merged['title'] = ''
             aliases = {'年份': 'year', 'year': 'year', '第一作者': 'authors', 'author': 'authors',
                        '标题': 'title', 'title': 'title', '期刊': 'venue', 'journal': 'venue', 'venue': 'venue', 'DOI': 'doi', 'doi': 'doi'}
-            required = {'title'} | {aliases[name] for _, name, _, _ in string.Formatter().parse(library.template(record['primary_project'])) if name in aliases}
+            required = {'title'}
             missing = [NAMES[k] for k in sorted(required) if not meaningful(merged.get(k))]
             if missing:
                 raise ValueError('缺少可靠的' + '、'.join(missing) + '；请先“编辑信息”补全，或关联含题名和署名的正文。')

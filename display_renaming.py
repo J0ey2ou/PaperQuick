@@ -1,6 +1,7 @@
 """Display-only naming. This workflow never renames or writes any attachment file."""
 from library_core import display_name, readable_attachments,validate_template
 from metadata_renaming import extract_article_metadata, meaningful
+from naming_rules import optional_name
 
 FIELDS=('title','authors','venue','year','doi')
 
@@ -11,12 +12,12 @@ def display_template(library, project):
 
 def display_name_from_rule(fields, project_name, template='{标题}', title_length=500):
     validate_template(template)
-    author=str(fields.get('authors') or '').split(';')[0].split('；')[0].split('\n')[0].strip() or '未知作者'
-    values={'title':str(fields.get('title') or '未命名')[:title_length], 'author':author,
-            'year':str(fields.get('year') or '未知年份'),'doi':str(fields.get('doi') or '无DOI'),
-            'project':project_name,'journal':str(fields.get('venue') or '未知期刊')}
+    author=str(fields.get('authors') or '').split(';')[0].split('；')[0].split('\n')[0].strip()
+    values={'title':str(fields.get('title') or '')[:title_length], 'author':author,
+            'year':str(fields.get('year') or ''),'doi':str(fields.get('doi') or ''),
+            'project':project_name,'journal':str(fields.get('venue') or '')}
     values.update(标题=values['title'],第一作者=author,年份=values['year'],DOI=values['doi'],课题=project_name,期刊=values['journal'],venue=values['journal'])
-    return template.format(**values)[:500]
+    return optional_name(template, values, fields.get('title') or '未命名文献')[:500]
 
 
 def prepare_display_names(library, ids):

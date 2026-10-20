@@ -18,6 +18,8 @@ import urllib.parse
 import zipfile
 import xml.etree.ElementTree as ET
 from library_workflow import LibraryWorkflow
+from library_organization import LibraryOrganization, normalize_tags
+from naming_rules import optional_name
 
 FIELDS = ('title', 'authors', 'year', 'doi', 'venue', 'abstract', 'keywords', 'notes', 'status')
 DEFAULT_TEMPLATE = '{年份}_{第一作者}_{标题}'
@@ -50,13 +52,13 @@ def validate_template(template):
 
 def filename(record, project, template=DEFAULT_TEMPLATE, title_length=80):
     validate_template(template)
-    author = re.split(r'\n|;|；| 等| et al', record.get('authors', ''))[0].strip() or '未知作者'
-    values = {'年份': record.get('year') or '未知年份', '第一作者': author,
-              '标题': (record.get('title') or '未命名')[:title_length], 'DOI': record.get('doi') or '无DOI', '课题': project}
-    values['期刊'] = record.get('venue') or '未知期刊'
+    author = re.split(r'\n|;|；| 等| et al', record.get('authors', ''))[0].strip()
+    values = {'年份': record.get('year') or '', '第一作者': author,
+              '标题': (record.get('title') or '')[:title_length], 'DOI': record.get('doi') or '', '课题': project}
+    values['期刊'] = record.get('venue') or ''
     values.update(dict(zip(('year', 'author', 'title', 'doi', 'project'), (values[k] for k in ('年份', '第一作者', '标题', 'DOI', '课题')))))
     values.update(journal=values['期刊'], venue=values['期刊'])
-    return clean_name(template.format(**values), 150) + '.pdf'
+    return clean_name(optional_name(template, values, record.get('title') or '未命名文献'), 150) + '.pdf'
 
 def digest(path):
     h = hashlib.sha256()
@@ -169,7 +171,7 @@ def pdf_metadata(path):
     return {'title': title, 'authors': str(meta.get('/Author') or ''), 'year': year.group() if year else '',
             'doi': normalize_doi(doi.group()) if doi else '', 'text': text,'references':parse_references(text)}
 
-class Library(LibraryWorkflow):
+class Library(LibraryWorkflow, LibraryOrganization):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -190,6 +192,7 @@ class Library(LibraryWorkflow):
         self.db.commit()
         self._migrate_attachments()
         self.workflow_schema()
+        self.organization_schema()
         if not self.projects():
             self.create_project('未分类')
 
@@ -232,26 +235,30 @@ class Library(LibraryWorkflow):
             raise ValueError('课题不存在。')
         return dict(row)
 
-    def create_project(self, name):
+    def create_project(self, name, parent=None):
         name = name.strip()
         if not name:
             raise ValueError('请填写课题名称。')
-        old = self.db.execute('SELECT id FROM projects WHERE name=?', (name,)).fetchone()
+        if parent:
+            name = self.project(parent)['name'] + ' / ' + name
+        old = self.db.execute('SELECT id,parent FROM projects WHERE name=?', (name,)).fetchone()
         if old:
+            if (old['parent'] or '') != (parent or ''):
+                raise ValueError('该名称已被其他课题使用，请换一个名称。')
             return old[0]
         pid = uuid.uuid4().hex
         folder = clean_name(name, 60) + '_' + pid[:6]
         (self.root / 'papers' / folder).mkdir(parents=True, exist_ok=True)
         with self.db:
-            self.db.execute('INSERT INTO projects(id,name,folder) VALUES(?,?,?)', (pid, name, folder))
+            self.db.execute('INSERT INTO projects(id,name,folder,parent) VALUES(?,?,?,?)', (pid, name, folder, parent or ''))
         return pid
 
     def records(self, project=None):
         query = 'SELECT p.* FROM papers p'
         args = ()
         if project:
-            query += ' JOIN memberships m ON m.paper=p.id WHERE m.project=?'
-            args = (project,)
+            args = tuple(self.project_descendants(project))
+            query += ' WHERE p.id IN (SELECT paper FROM memberships WHERE project IN (' + ','.join('?' for _ in args) + '))'
         return [self._record(row) for row in self.db.execute(query + ' ORDER BY p.updated DESC', args)]
 
     def recent_read(self, limit=50):
@@ -268,6 +275,8 @@ class Library(LibraryWorkflow):
         data.update(id=row['id'], primary_project=row['primary_project'])
         data['projects'] = [r[0] for r in self.db.execute('SELECT project FROM memberships WHERE paper=?', (row['id'],))]
         data['attachments'] = [dict(r) for r in self.db.execute('SELECT * FROM attachments WHERE paper=? ORDER BY rowid', (row['id'],))]
+        data.setdefault('tags', [])
+        data.setdefault('rating', 0)
         return data
 
     def get(self, rid):
@@ -278,6 +287,12 @@ class Library(LibraryWorkflow):
 
     def save(self, data, project=None, rid=None, deduplicate=True):
         data = dict(data)
+        if 'tags' in data:
+            data['tags'] = normalize_tags(data['tags'])
+        if 'rating' in data:
+            if str(data['rating']) not in ('0', '1', '2', '3', '4', '5'):
+                raise ValueError('评分请选择 0–5 星，0 表示未评分。')
+            data['rating'] = int(data['rating'])
         if 'doi' in data:
             data['doi'] = normalize_doi(data['doi'])
         if not rid and deduplicate and data.get('doi'):
@@ -301,12 +316,16 @@ class Library(LibraryWorkflow):
             if rid and 'additional_project' in locals() and additional_project:
                 self.project(additional_project)
                 self.db.execute('INSERT OR IGNORE INTO memberships VALUES(?,?)', (rid, additional_project))
+                self.db.execute('DELETE FROM tag_memberships WHERE paper=? AND project=?',(rid,additional_project))
             self.log('save', {'paper': rid})
+            self.sync_tag_memberships(rid, data.get('tags', []), project)
         return rid
 
     def assign(self, rid, project, primary=False):
+        self.get(rid)
         self.project(project)
         with self.db:
+            self.db.execute('DELETE FROM tag_memberships WHERE paper=? AND project=?', (rid, project))
             self.db.execute('INSERT OR IGNORE INTO memberships VALUES(?,?)', (rid, project))
             if primary:
                 self.db.execute('UPDATE papers SET primary_project=? WHERE id=?', (project, rid))

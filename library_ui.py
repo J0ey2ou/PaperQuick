@@ -10,6 +10,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 import webbrowser
 from library_core import Library, FIELDS, DEFAULT_TEMPLATE, validate_template, filename,local_attachments,readable_attachments,display_name
 from download_actions import resolve_download
+from library_organization import READING_STATES,normalize_tags
 from graph_view import write_graph
 import endnote_sync
 from ui_theme import BG, PANEL, SURFACE, FG, MUTED, ACCENT, LINE, FONT, install_theme, emblem, style_dialog
@@ -57,13 +58,20 @@ class LibraryWindow:
         self.projects.bind('<<ListboxSelect>>',self.select_project)
         project_button=ttk.Button(left,text='+ 新建课题',command=self.new_project)
         project_button.pack(side='bottom',fill='x',pady=8,before=self.projects)
+        ttk.Button(left,text='+ 新建子课题',command=self.new_subproject).pack(side='bottom',fill='x',before=self.projects)
+        ttk.Button(left,text='标签自动归类规则',command=self.project_tag_rules).pack(side='bottom',fill='x',pady=8,before=self.projects)
         filterbar=ttk.Frame(right,style='Card.TFrame');filterbar.pack(fill='x',pady=(2,14))
         self.scope_title=tk.StringVar(value='全部文献')
         ttk.Label(filterbar,textvariable=self.scope_title,font=(FONT,12,'bold'),style='Card.TLabel').pack(side='left',padx=(0,18));ttk.Label(filterbar,text='搜索',style='CardMuted.TLabel').pack(side='left');ttk.Entry(filterbar,textvariable=self.search).pack(side='left',fill='x',expand=True,padx=(10,0))
         self.search.trace_add('write',lambda *_:self.refresh_records())
-        columns=('title','year','project','status','pdf')
+        filters=ttk.Frame(right,style='Card.TFrame');filters.pack(fill='x',pady=(0,8))
+        self.status_filter=tk.StringVar(value='全部状态');self.rating_filter=tk.StringVar(value='全部评分');self.tag_filter=tk.StringVar(value='全部标签')
+        for variable,values,width in [(self.status_filter,['全部状态',*READING_STATES],12),(self.rating_filter,['全部评分','未评分',*[f'{i} 星及以上' for i in range(1,6)]],14),(self.tag_filter,['全部标签'],18)]:
+            box=ttk.Combobox(filters,textvariable=variable,values=values,width=width,state='readonly');box.pack(side='left',padx=(0,8));box.bind('<<ComboboxSelected>>',lambda _:self.refresh_records())
+            if variable is self.tag_filter:self.tag_filter_box=box
+        columns=('title','year','project','tags','status','rating','pdf')
         self.tree=ttk.Treeview(right,columns=columns,show='headings',selectmode='extended',height=4)
-        for key,label,width in zip(columns,('论文标题','年份','主课题','阅读状态','全文'),(450,65,130,90,80)):
+        for key,label,width in zip(columns,('论文标题','年份','主课题','标签','阅读状态','评分','全文'),(340,55,115,120,70,75,65)):
             self.tree.heading(key,text=label);self.tree.column(key,width=width,stretch=key=='title')
         self.tree.tag_configure('even',background=PANEL)
         self.tree.tag_configure('odd',background='#132237')
@@ -79,6 +87,13 @@ class LibraryWindow:
         self.context_menu.add_command(label='附件管理 / 比对阅读',command=self.attachments)
         self.context_menu.add_command(label='添加文献关系',command=self.add_relationship)
         self.context_menu.add_command(label='Word / PDF 互转',command=self.convert_document)
+        self.context_menu.add_command(label='打开已下载原文所在位置',command=self.open_document_location)
+        self.context_menu.add_command(label='编辑标签',command=self.edit_tags)
+        self.context_menu.add_command(label='ChatGPT 通篇解读 / 修改模板',command=self.chat_full_paper)
+        states=tk.Menu(self.context_menu,tearoff=False);ratings=tk.Menu(self.context_menu,tearoff=False)
+        for value in READING_STATES:states.add_command(label=value,command=lambda v=value:self.mark(v))
+        for value in range(6):ratings.add_command(label=('未评分' if value==0 else '★'*value),command=lambda v=value:self.rate(v))
+        self.context_menu.add_cascade(label='阅读状态',menu=states);self.context_menu.add_cascade(label='文献评分',menu=ratings)
         self.context_menu.add_separator();self.context_menu.add_command(label='删除文献',command=self.delete_selected);self.context_menu.add_command(label='恢复最近删除',command=self.restore_deleted)
         self.tree.bind('<Control-a>',lambda _:self.select_all(False))
         selection_bar=ttk.Frame(footer,padding=(24,8,24,0));selection_bar.pack(fill='x')
@@ -105,6 +120,7 @@ class LibraryWindow:
         for window in (self.word_citations,self.attachment_window,self.conversion_window):
             if window and not window.closed:window.close()
         self.library.close();self.win.destroy()
+        if getattr(self,'_chat_bridge',None):self._chat_bridge.close()
 
     def attachments(self):
         if self.busy:return
@@ -140,11 +156,20 @@ class LibraryWindow:
     def refresh(self):
         previous=self.current_project
         records=self.library.records()
+        tags=sorted({t for r in records for t in r.get('tags',[])},key=str.casefold);self.tag_filter_box.configure(values=['全部标签',*tags])
+        if self.tag_filter.get() not in ['全部标签',*tags]:self.tag_filter.set('全部标签')
         for value,count in zip(self.metrics,(len(records),sum(any(a.get('role')=='primary' for a in readable_attachments(r)) for r in records),sum(r['status']=='已读' for r in records),len(self.library.projects()))):value.set(str(count))
-        self.project_rows=self.library.projects();self.projects.delete(0,'end')
+        project_items=self.library.projects();children={}
+        for p in project_items:children.setdefault(p.get('parent',''),[]).append(p)
+        self.project_rows=[]
+        def add_children(parent,depth=0):
+            for p in children.get(parent,[]):
+                p['_depth']=depth;self.project_rows.append(p);add_children(p['id'],depth+1)
+        add_children('');self.projects.delete(0,'end')
         self.projects.insert('end',f'全部文献 ({len(self.library.records())})')
         for p in self.project_rows:
-            self.projects.insert('end',f"{p['name']} ({len(self.library.records(p['id']))})")
+            label=p['name'].split(' / ')[-1] if p.get('parent') else p['name']
+            self.projects.insert('end',f"{'  '*p['_depth']}{label} ({len(self.library.records(p['id']))})")
         index=next((i+1 for i,p in enumerate(self.project_rows) if p['id']==previous),0)
         self.projects.selection_set(index);self.refresh_records()
 
@@ -160,8 +185,13 @@ class LibraryWindow:
         self.scope_title.set(self.library.project(self.current_project)['name'] if self.current_project else '全部文献')
         index=0
         for r in self.library.records(self.current_project):
-            if query not in ' '.join(str(r.get(k,'')) for k in ('title','display_name','doi','authors','keywords')).lower():continue
-            self.tree.insert('','end',iid=r['id'],values=(display_name(r),r['year'],self.library.project(r['primary_project'])['name'],r['status'],'已归档' if any(a.get('role')=='primary' for a in readable_attachments(r)) else '待添加'),tags=('odd' if index%2 else 'even','read' if r['status']=='已读' else ''))
+            if query not in ' '.join(str(r.get(k,'')) for k in ('title','display_name','doi','authors','keywords','tags')).lower():continue
+            if self.status_filter.get()!='全部状态' and r['status']!=self.status_filter.get():continue
+            rating=r.get('rating',0)
+            if self.rating_filter.get()=='未评分' and rating:continue
+            if '星及以上' in self.rating_filter.get() and rating<int(self.rating_filter.get()[0]):continue
+            if self.tag_filter.get()!='全部标签' and self.tag_filter.get() not in r.get('tags',[]):continue
+            self.tree.insert('','end',iid=r['id'],values=(display_name(r),r['year'],self.library.project(r['primary_project'])['name'],'；'.join(r.get('tags',[])),r['status'],'★'*rating or '未评分','已归档' if any(a.get('role')=='primary' for a in readable_attachments(r)) else '待添加'),tags=('odd' if index%2 else 'even','read' if r['status']=='已读' else ''))
             index+=1
             if r['id'] in selected:self.tree.selection_add(r['id'])
 
@@ -173,7 +203,7 @@ class LibraryWindow:
     def detail(self,_=None):
         if not self.tree.selection():return
         r=self.library.get(self.tree.selection()[0]);names=' / '.join(self.library.project(p)['name'] for p in r['projects'])
-        self.details.set(f"{r['authors'][:150]} · DOI: {r['doi'] or '待补充'}\n课题：{names}\n{r['abstract'][:220] or '摘要待补充'}")
+        self.details.set(f"{r['authors'][:150]} · DOI: {r['doi'] or '待补充'}\n课题：{names} · 标签：{'；'.join(r.get('tags',[])) or '无'} · 评分：{'★'*r.get('rating',0) or '未评分'}\n{r['abstract'][:220] or '摘要待补充'}")
 
     def run(self,title,work,done=None):
         if self.busy:return
@@ -209,12 +239,54 @@ class LibraryWindow:
         value=tk.StringVar(value=self.library.project(self.current_project)['name'] if self.current_project else self.library.projects()[0]['name'])
         combo=ttk.Combobox(panel,textvariable=value,values=[p['name'] for p in self.library.projects()],width=45);combo.pack(fill='x',pady=12)
         def accept():
-            try:pid=self.library.create_project(value.get())
+            try:pid=next((p['id'] for p in self.library.projects() if p['name']==value.get().strip()),None) or self.library.create_project(value.get())
             except Exception as exc:messagebox.showerror('课题',str(exc),parent=dialog);return
             dialog.destroy();self.refresh();callback(pid)
         ttk.Button(panel,text='确认',command=accept).pack(anchor='e')
 
     def new_project(self):self.choose_project(lambda pid:None,'新建课题')
+
+    def new_subproject(self):
+        if not self.current_project:self.status.set('请先在左侧选择父课题，再新建子课题。');return
+        name=simpledialog.askstring('新建子课题','父课题：'+self.library.project(self.current_project)['name']+'\n子课题名称：',parent=self.win)
+        if name:
+            try:self.library.create_project(name,self.current_project);self.refresh()
+            except ValueError as exc:self.status.set(str(exc))
+
+    def project_tag_rules(self):
+        if not self.current_project:self.status.set('请先选择要自动归类到的课题或子课题。');return
+        pid=self.current_project
+        tags=simpledialog.askstring('标签自动归类','匹配任意一个标签即加入此课题；多个标签用分号分隔。\n清空会移除此课题的自动规则，手动分类保留。',initialvalue='；'.join(self.library.project_rules(pid)),parent=self.win)
+        if tags is not None:self.run('更新标签归类规则',lambda lib:lib.set_project_rules(pid,tags),lambda _:self.status.set('规则已应用到现有文献；以后设置标签也会自动归类。'))
+
+    def edit_tags(self):
+        ids=self.selected()
+        if not ids:return
+        initial='；'.join(self.library.get(ids[0]).get('tags',[])) if len(ids)==1 else ''
+        tags=simpledialog.askstring('编辑文献标签','标签用分号分隔；本次会替换所选文献的标签。',initialvalue=initial,parent=self.win)
+        if tags is None:return
+        try:
+            normalized=normalize_tags(tags)
+            self.run('保存标签并自动归类',lambda lib:[lib.save({'tags':normalized},rid=rid) for rid in ids])
+        except ValueError as exc:self.status.set(str(exc))
+
+    def rate(self,value):
+        for rid in self.selected():self.library.save({'rating':value},rid=rid)
+        self.refresh()
+
+    def open_document_location(self):
+        rid=self.selected(True)
+        if not rid:return
+        try:os.startfile(self.library.document_location(rid).parent)
+        except (ValueError,OSError) as exc:self.status.set(str(exc))
+
+    def chat_full_paper(self,rid=None):
+        rid=rid or self.selected(True)
+        if not rid:return
+        from chat_bridge import ChatBridge
+        from chat_prompt_ui import ChatPromptDialog
+        if not getattr(self,'_chat_bridge',None):self._chat_bridge=ChatBridge(self.library.root)
+        self.chat_prompt=ChatPromptDialog(self.win,self.library.root,rid,self._chat_bridge)
 
     def import_pdfs(self):
         paths=filedialog.askopenfilenames(parent=self.win,title='导入文档（保留原文件）',filetypes=[('文献文档','*.pdf *.docx *.doc *.txt *.md'),('PDF','*.pdf'),('Word','*.docx *.doc'),('文本','*.txt *.md')])
@@ -235,6 +307,8 @@ class LibraryWindow:
         def done(result):
             self.status.set(f"已导入 / 关联 {result['count']} 份文档。可点击“撤回导入”撤销这一批。")
             if result['errors']:messagebox.showwarning('部分文件未导入','\n'.join(result['errors'][:12]),parent=self.win)
+            new_ids=result.get('new_paper_ids',[])
+            if len(new_ids)==1:self.chat_full_paper(new_ids[0])
         self.run('正在整理文献',lambda lib:lib.import_batch(paths,pid),done)
 
     def undo_import(self):
@@ -368,15 +442,28 @@ class LibraryWindow:
     def edit_record(self,rid):
         data=self.library.get(rid) if rid else {}
         dialog=tk.Toplevel(self.win);style_dialog(dialog);dialog.title('编辑文献信息');dialog.transient(self.win)
-        panel=ttk.Frame(dialog,padding=18);panel.pack(fill='both',expand=True);variables={}
+        dialog.geometry(f"760x{min(800,max(480,dialog.winfo_screenheight()-120))}")
+        footer=ttk.Frame(dialog,padding=(18,8));footer.pack(side='bottom',fill='x')
+        canvas=tk.Canvas(dialog,highlightthickness=0);scroll=ttk.Scrollbar(dialog,command=canvas.yview);scroll.pack(side='right',fill='y');canvas.configure(yscrollcommand=scroll.set);canvas.pack(fill='both',expand=True)
+        panel=ttk.Frame(canvas,padding=18);item=canvas.create_window(0,0,window=panel,anchor='nw');variables={}
+        panel.bind('<Configure>',lambda _:canvas.configure(scrollregion=canvas.bbox('all')));canvas.bind('<Configure>',lambda e:canvas.itemconfigure(item,width=e.width))
+        canvas.bind('<MouseWheel>',lambda e:canvas.yview_scroll(-int(e.delta/120),'units'))
         labels=('标题','作者（换行或分号分隔）','年份','DOI','期刊','摘要','关键词','笔记','阅读状态')
         for field,label in zip(FIELDS,labels):
+            if field=='status':continue
             ttk.Label(panel,text=label).pack(anchor='w');widget=tk.Text(panel,height=3 if field in ('abstract','notes') else 1,width=82,wrap='word');widget.insert('1.0',data.get(field,'未读' if field=='status' else ''));widget.pack(fill='x',pady=(2,7));variables[field]=widget
+        tags=tk.StringVar(value='；'.join(data.get('tags',[])));state=tk.StringVar(value=data.get('status','未读'));rating=tk.StringVar(value=str(data.get('rating',0)))
+        ttk.Label(panel,text='标签（分号分隔，自动匹配课题规则）').pack(anchor='w');ttk.Entry(panel,textvariable=tags).pack(fill='x',pady=5)
+        bar=ttk.Frame(panel);bar.pack(fill='x',pady=6)
+        for label,variable,choices in [('阅读状态',state,READING_STATES),('评分',rating,list(range(6)))]:
+            ttk.Label(bar,text=label).pack(side='left',padx=8);ttk.Combobox(bar,textvariable=variable,values=choices,state='readonly',width=10).pack(side='left')
         def save():
             values={f:w.get('1.0','end').strip() for f,w in variables.items()}
+            try:values.update(tags=normalize_tags(tags.get()),status=state.get(),rating=int(rating.get()))
+            except ValueError as exc:messagebox.showerror('标签或评分',str(exc),parent=dialog);return
             if not values['title']:messagebox.showerror('标题','请填写标题。',parent=dialog);return
             self.library.save(values,self.current_project,rid);dialog.destroy();self.refresh()
-        ttk.Button(panel,text='保存',command=save).pack(anchor='e')
+        ttk.Button(footer,text='保存',command=save).pack(anchor='e')
 
     def assign(self):
         ids=self.selected()
@@ -395,7 +482,7 @@ class LibraryWindow:
         dialog=tk.Toplevel(self.win);style_dialog(dialog);dialog.title('显示名称生成规则');panel=ttk.Frame(dialog,padding=20);panel.pack(fill='both')
         scope=self.current_project
         ttk.Label(panel,text='当前课题规则' if scope else '全库默认规则',font=('Microsoft YaHei UI',12,'bold')).pack(anchor='w')
-        ttk.Label(panel,text='支持 {年份} {第一作者} {标题} {期刊} {DOI} {课题}。\n只生成软件中的显示名称，不更改原文件或归档附件的文件名。').pack(anchor='w',pady=10)
+        ttk.Label(panel,text='支持 {年份} {第一作者} {标题} {期刊} {DOI} {课题}。缺失字段会自动跳过。\n只生成软件中的显示名称，不更改原文件或归档附件的文件名。').pack(anchor='w',pady=10)
         template=tk.StringVar(value=display_template(self.library,scope) if scope else self.library.setting('display_name_template','{标题}'))
         ttk.Entry(panel,textvariable=template,width=70).pack(fill='x')
         length=tk.StringVar(value=str(self.library.setting('display_title_length',500)));ttk.Label(panel,text='标题最大字符数（20–500）').pack(anchor='w',pady=(10,3));ttk.Entry(panel,textvariable=length,width=8).pack(anchor='w')

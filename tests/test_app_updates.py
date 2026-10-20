@@ -83,3 +83,25 @@ class UpdateTests(unittest.TestCase):
         with patch('app_updates._open',side_effect=AssertionError('Must reuse verified download')):
             plan=updates.download_update(self.root,release)
         self.assertEqual(plan.parent,self.stage)
+
+    def test_stable_updates_use_public_manifest_without_anonymous_api_quota(self):
+        feed={'schema':1,'version':'3.5.1','tag':'v3.5.1','prerelease':False,'notes':'Release notes',
+              'package':{'name':'PaperQuick-v3.5.1-Windows.zip','url':'https://github.com/J0ey2ou/PaperQuick/releases/download/v3.5.1/PaperQuick-v3.5.1-Windows.zip','size':42,'sha256':'a'*64}}
+        def open_fixture(url):
+            self.assertEqual(url,updates.UPDATE_FEED)
+            return io.BytesIO(json.dumps(feed).encode())
+        with patch('app_updates._open',side_effect=open_fixture):
+            self.assertEqual(updates.check_update('3.4.3')['version'],'3.5.1')
+            self.assertIsNone(updates.check_update('3.5.1'))
+        feed['package']['url']='https://evil.example/app.zip'
+        with self.assertRaises(ValueError):updates.manifest_release(feed,'3.4.3')
+
+    def test_missing_public_manifest_falls_back_to_release_api(self):
+        from urllib.error import HTTPError
+        calls=[]
+        def open_fixture(url):
+            calls.append(url)
+            if url==updates.UPDATE_FEED:raise HTTPError(url,404,'Not found',{},None)
+            return io.BytesIO(b'[]')
+        with patch('app_updates._open',side_effect=open_fixture):self.assertIsNone(updates.check_update('3.5.1'))
+        self.assertEqual(calls,[updates.UPDATE_FEED,updates.API])

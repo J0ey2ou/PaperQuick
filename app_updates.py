@@ -15,6 +15,7 @@ import zipfile
 
 REPO = 'J0ey2ou/PaperQuick'
 API = 'https://api.github.com/repos/' + REPO + '/releases?per_page=30'
+UPDATE_FEED = 'https://github.com/' + REPO + '/releases/latest/download/update.json'
 MAX_PACKAGE = 512 * 1024 * 1024
 ROOT_FILES = {'文献直达.exe','全局选词助手.exe','打开文献库.bat','README.md','CONTRIBUTING.md','RELEASE_NOTES.md',
               '使用说明.md','本地文献库使用说明.md','右键插件安装.html','推送文案.html','推送文案.txt','推送文案.md',
@@ -67,8 +68,33 @@ def select_release(releases, current, preview=False):
     return max(candidates,key=lambda r:version_tuple(r['version']),default=None)
 
 
+def manifest_release(data,current,preview=False):
+    if not isinstance(data,dict) or data.get('schema')!=1:raise ValueError('更新清单格式不正确。')
+    version=str(data.get('version',''));version_tuple(version)
+    package=data.get('package',{});name='PaperQuick-v'+version+'-Windows.zip'
+    if data.get('tag')!='v'+version or package.get('name')!=name:raise ValueError('更新清单版本与安装包不匹配。')
+    release={'tag_name':'v'+version,'prerelease':bool(data.get('prerelease')),'body':data.get('notes',''),
+             'assets':[{'name':name,'state':'uploaded','size':package.get('size',0),
+                        'digest':'sha256:'+str(package.get('sha256','')),'browser_download_url':package.get('url','')}]}
+    if select_release([release],'0.0.0',True) is None:raise ValueError('更新清单缺少有效的校验信息或下载地址。')
+    return select_release([release],current,preview)
+
+
 def check_update(current, preview=False):
-    with _open(API) as response:data=response.read(4*1024*1024+1)
+    def public_manifest():
+        with _open(UPDATE_FEED) as response:data=response.read(1024*1024+1)
+        if len(data)>1024*1024:raise ValueError('更新清单过大。')
+        return manifest_release(json.loads(data),current,preview)
+    # Stable clients need no anonymous GitHub API quota or access token.
+    if not preview:
+        import urllib.error
+        try:return public_manifest()
+        except (urllib.error.URLError,TimeoutError):pass
+    try:
+        with _open(API) as response:data=response.read(4*1024*1024+1)
+    except OSError as exc:
+        if not preview:raise ValueError('暂时无法检查更新，请检查网络后重试。') from exc
+        raise ValueError('预览版接口暂不可用或已限流；可取消“接收预览版”检查正式版本。') from exc
     if len(data)>4*1024*1024:raise ValueError('更新列表过大，请稍后重试。')
     releases=json.loads(data)
     if not isinstance(releases,list):raise ValueError('暂时无法获取版本列表。')

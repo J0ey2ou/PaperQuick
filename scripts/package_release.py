@@ -35,6 +35,9 @@ def main():
     partial.replace(destination)
     digest=hashlib.sha256(destination.read_bytes()).hexdigest()
     (built/'SHA256SUMS.txt').write_text(f'{digest}  {destination.name}\n',encoding='ascii')
+    feed={'schema':1,'version':VERSION,'tag':'v'+VERSION,'prerelease':args.prerelease,'notes':notes,
+          'package':{'name':destination.name,'url':'https://github.com/J0ey2ou/PaperQuick/releases/download/v'+VERSION+'/'+destination.name,'size':destination.stat().st_size,'sha256':digest}}
+    (built/'update.json').write_text(json.dumps(feed,ensure_ascii=False,indent=2),'utf-8')
     (BASE/'build'/('v'+VERSION.replace('.','')+'-package-check.json')).write_text(json.dumps({'version':VERSION,'file':str(destination),'bytes':destination.stat().st_size,'sha256':digest,'files':len(manifest['files'])+1,'complete_package':True,'private_data_included':False},indent=2),'utf-8')
     print(destination.name,digest)
 

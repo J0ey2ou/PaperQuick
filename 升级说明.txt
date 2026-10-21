@@ -10,3 +10,5 @@
 
 请保留完整文献库、settings.json 和 shortcut.json。设置内检查更新，正常退出后安装；程序占用时保留待更新包。重新加载浏览器扩展 2.6.0，并刷新所用 AI 网页。
 使用说明见 docs/ai-reading.md。
+
+Mac 试用包单独提供 Apple 芯片 / Intel 版本；仅打包、未测试、未 Apple 公证，参见 docs/macos-preview.md。Windows 最新正式发布和更新清单保持不变。

@@ -1,5 +1,7 @@
 # 文献直达 · PaperQuick
 
+**macOS 试用包**：[Apple 芯片与 Intel 下载](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.7.0-macos.1) · [Mac 安装说明与功能边界](docs/macos-preview.md)。按用户要求仅打包，未进行 Mac 功能测试，未 Apple 公证；Windows 正式更新通道不变。
+
 **v3.7.0**：新增阅读页 AI 助手，保留网页账号与 API 两种方式，支持 ChatGPT、豆包、DeepSeek、Gemini、千问 / Qwen、Kimi 及自定义兼容 API。选文右键提问、流式回答、同篇对话、回答及选中部分加入笔记并定位原文；设置支持模型、地址、加密密钥与连接测试。浏览器扩展升级至 2.6.0。详见 [AI 阅读助手](docs/ai-reading.md)。设置内自动更新入口继续有效。
 
 **v3.6.0**：ChatGPT 回复可一键回存原讨论页批注；支持跨 PDF 的具体位置链接与带批注 PDF 副本导出。重新调整书页主题、标题栏筛选、高 DPI 表头和滚动，新增已有标签选择、全库重命名与删除。修复阅读页导入后列表不刷新，增加逐文件导入结果和进度，并优化列表查询及搜索响应。[本版使用与升级说明](docs/v3.6-upgrade.md)。设置内“检查更新”持续连接最新正式版。

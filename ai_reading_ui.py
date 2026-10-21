@@ -33,7 +33,7 @@ class AISettings:
         ttk.Label(panel, text='工具与 API 配置', font=(FONT, 15, 'bold')).pack(anchor='w')
         combo = ttk.Combobox(panel, textvariable=self.provider, values=list(self.name_to_id), state='readonly');combo.pack(fill='x', pady=12)
         combo.bind('<<ComboboxSelected>>', lambda _:self.load())
-        for label, variable in [('API 地址（兼容 Chat Completions）', self.endpoint), ('模型 ID（按你的账号权限填写）', self.model), ('API Key（留空保留，使用 Windows 加密存储）', self.key)]:
+        for label, variable in [('API 地址（兼容 Chat Completions）', self.endpoint), ('模型 ID（按你的账号权限填写）', self.model), ('API Key（留空保留，使用系统加密存储）', self.key)]:
             ttk.Label(panel, text=label).pack(anchor='w', pady=(8, 4))
             ttk.Entry(panel, textvariable=variable, show='•' if variable is self.key else '').pack(fill='x')
         ttk.Checkbutton(panel, text='流式显示回答（接口不支持时可关闭）', variable=self.stream).pack(anchor='w', pady=12)

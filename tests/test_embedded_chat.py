@@ -28,6 +28,15 @@ class EmbeddedUiTests(unittest.TestCase):
             view.url='https://chatgpt.com/#accepted';view.pending_url='https://chatgpt.com/#rejected'
             view.events.put({'state':'error','detail':'已有草稿'});view.poll();view.reveal()
             process.stdin.write.assert_called_once_with('{"type":"sync-host"}\n')
+            self.assertIn('正在确认',view.status.get())
+            with tempfile.TemporaryDirectory() as temporary:
+                view.diagnostic_path=Path(temporary)/'display.jsonl'
+                view.events.put({'state':'display-state','detail':'显示通道已就绪','controllerReady':True,'controllerVisible':True,'hostKind':'native-core','renderMode':'software','url':'secret-token','quote':'private quote'})
+                view.poll();saved=view.diagnostic_path.read_text('utf-8')
+                self.assertNotIn('secret-token',saved);self.assertNotIn('private quote',saved)
+                self.assertIn('native-core',saved)
+                view.diagnostic_path=None
+            self.assertEqual(view.status.get(),'显示通道已就绪')
             with patch('webbrowser.open') as browser:view.external();browser.assert_called_once_with(view.url)
             view.events.put({'state':'opened','detail':'已打开','url':'https://chatgpt.com/#next'});view.poll()
             self.assertEqual(view.url,'https://chatgpt.com/#next')
@@ -43,7 +52,19 @@ class EmbeddedTests(unittest.TestCase):
     def test_hidden_generic_adapter_roundtrip(self):
         self.run_provider('deepseek')
 
-    def run_provider(self,provider):
+    def run_provider(self,provider,*,mapped=False):
+        if mapped:
+            # This branch may map windows ONLY on an explicitly created private
+            # desktop. A stray invocation on the user's desktop fails before Tk.
+            import ctypes
+            from ctypes import wintypes
+            user=ctypes.WinDLL('user32');kernel=ctypes.WinDLL('kernel32')
+            user.GetThreadDesktop.argtypes=[wintypes.DWORD];user.GetThreadDesktop.restype=wintypes.HANDLE
+            user.GetUserObjectInformationW.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(wintypes.DWORD)]
+            name=ctypes.create_unicode_buffer(256);needed=wintypes.DWORD()
+            user.GetUserObjectInformationW(user.GetThreadDesktop(kernel.GetCurrentThreadId()),2,name,ctypes.sizeof(name),ctypes.byref(needed))
+            self.assertTrue(name.value.startswith('PaperQuickTests_'))
+            self.assertEqual(name.value,os.environ.get('PAPERQUICK_TEST_DESKTOP'))
         root_path=Path(__file__).resolve().parents[1]
         base=root_path/'build/embedded-tests';base.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=base) as temporary:
@@ -52,7 +73,16 @@ class EmbeddedTests(unittest.TestCase):
             fixture=folder/'fixture.html';fixture.write_text('''<!doctype html><main><form><div id="prompt-textarea" class="ProseMirror" contenteditable="true" role="textbox" style="min-height:40px"></div><div id="attachments"></div></form><input type="file">
 <script>const editor=document.querySelector('[contenteditable]');document.querySelector('input').onchange=e=>{for(const file of e.target.files){const chip=document.createElement('div');chip.dataset.testid='attachment';chip.dataset.uploadState='complete';chip.textContent=file.name;document.querySelector('#attachments').append(chip);}};
 window.pqFixtureSubmit=()=>{const turn=document.createElement('article');turn.dataset.testid='conversation-turn-1';const user=document.createElement('div');user.dataset.messageAuthorRole='user';user.textContent=editor.innerText;turn.append(user,...document.querySelector('#attachments').children);document.querySelector('main').prepend(turn);editor.replaceChildren();history.pushState(null,'','/c/12345678-native-fixture');const answer=document.createElement('div');answer.dataset.messageAuthorRole='assistant';answer.innerHTML='<div class="markdown">Native fixture answer</div>';turn.append(answer);};</script></main>'''.replace('/c/12345678-native-fixture','/a/chat/s/12345678-native-fixture' if provider=='deepseek' else '/c/12345678-native-fixture'),'utf-8')
-            root=tk.Tk();root.withdraw();parent=tk.Frame(root);parent.place(x=0,y=0,width=900,height=750);root.update_idletasks()
+            root=tk.Tk()
+            if mapped:
+                root.geometry('1000x850+0+0')
+                tabs=ttk.Notebook(root);tabs.pack(fill='both',expand=True)
+                chat_tab=ttk.Frame(tabs);other_tab=ttk.Frame(tabs)
+                tabs.add(chat_tab,text='Chat fixture');tabs.add(other_tab,text='Notes fixture')
+                parent=tk.Frame(chat_tab);parent.place(x=80,y=100,width=900,height=650)
+            else:
+                root.withdraw();parent=tk.Frame(root);parent.place(x=0,y=0,width=900,height=750)
+            root.update()
             events=queue.Queue();process=None
             try:
                 environment=dict(os.environ,PAPERQUICK_EMBEDDED_FIXTURE=str(fixture),WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--disable-background-networking --disable-component-update --no-first-run')
@@ -95,6 +125,32 @@ window.pqFixtureSubmit=()=>{const turn=document.createElement('article');turn.da
                 wait(lambda:bool(mounted_children()[1]))
                 self.assertEqual(len(mounted_children()[0]),1,'Native form must be attached to the Tk host, not the invisible WinForms parking window')
                 wait(lambda:bridge.status(token)['state']=='ready')
+                import ctypes
+                from ctypes import wintypes
+                native_rect=wintypes.RECT();host_rect=wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(mounted_children()[0][0],ctypes.byref(native_rect))
+                ctypes.windll.user32.GetWindowRect(parent.winfo_id(),ctypes.byref(host_rect))
+                self.assertEqual((native_rect.left,native_rect.top),(host_rect.left,host_rect.top),'Browser must start at the host origin, including offset notebook panels')
+                def probe(visible):
+                    send({'type':'fixture-probe'});deadline=time.monotonic()+10
+                    while time.monotonic()<deadline:
+                        root.update()
+                        try:event=events.get(timeout=.03)
+                        except queue.Empty:continue
+                        if event['state']=='error':self.fail(event['detail'])
+                        if event['state']=='probe':
+                            self.assertTrue(event['attached']);self.assertEqual(event['controllerVisible'],visible)
+                            page=json.loads(json.loads(event['page']))
+                            self.assertEqual(page['visibility'],'visible' if visible else 'hidden')
+                            self.assertGreater(page['width'],1);self.assertGreater(page['height'],1)
+                            return
+                    self.fail('Native controller did not confirm its display state')
+                probe(True)
+                if mapped:tabs.select(other_tab);root.update()
+                send({'type':'fixture-visibility','visible':False});probe(False)
+                if mapped:tabs.select(chat_tab);root.update()
+                send({'type':'fixture-visibility','visible':True});probe(True)
+                if mapped:self.assertTrue(ctypes.windll.user32.IsWindowVisible(mounted_children()[1][0]),'Mapped renderer must be visible through its full native parent chain')
                 # Repair display and resize without navigating or losing draft.
                 parent.place_configure(width=640,height=480);root.update()
                 send({'type':'sync-host'});send({'type':'navigate','url':url})
@@ -111,10 +167,12 @@ window.pqFixtureSubmit=()=>{const turn=document.createElement('article');turn.da
                 deadline=time.monotonic()+8;protected=False
                 while time.monotonic()<deadline and not protected:
                     root.update()
-                    try:protected='草稿' in events.get(timeout=.1)['detail']
+                    try:
+                        event=events.get(timeout=.1)
+                        protected=event['state']=='error' and '草稿' in event['detail']
                     except queue.Empty:pass
                 self.assertTrue(protected,'Unsent native draft must remain intact')
-                self.assertFalse(root.winfo_ismapped());send({'type':'fixture-submit'})
+                self.assertEqual(bool(root.winfo_ismapped()),mapped);send({'type':'fixture-submit'})
                 if provider!='chatgpt':time.sleep(.3);send({'type':'fixture-bind'})
                 wait(lambda:bridge.status(token)['state']=='bound')
                 time.sleep(.5);send({'type':'fixture-reply'});wait(lambda:bool(lib.setting('ai-web-replies:'+rid+':'+provider,[])))

@@ -20,6 +20,8 @@ if (-not (Test-Path -LiteralPath "$projectDir\word-integration\vendor\node.exe")
 if (-not $SkipTests) {
     & $Python scripts/test_background.py
     if ($LASTEXITCODE -ne 0) { throw 'Background verification failed' }
+    & $Python scripts/check_embedded_desktop.py
+    if ($LASTEXITCODE -ne 0) { throw 'Isolated embedded rendering verification failed' }
 }
 $compilerPath=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 & $compilerPath /nologo /target:winexe "/out:$releaseDirectory\全局选词助手.exe" "/win32icon:$projectDir\browser-extension\app.ico" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll "$projectDir\selection-helper\SelectionAssistant.cs"

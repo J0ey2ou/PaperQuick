@@ -23,8 +23,10 @@ const waitState=async state=>{
 const checks=[];
 let context;
 const mode=process.argv[2]||'baseline';
+let phase='initializing';
+const deadline=setTimeout(()=>{console.error('Headless integration deadline exceeded: '+mode+' / '+phase);backend.kill();context?.close().catch(()=>{});process.exitCode=1;setTimeout(()=>process.exit(1),2000);},90000);
 
-function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=false,remount=false,nativeEditor=false,rejectText=false}={}) {
+function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=false,remount=false,nativeEditor=false,rejectText=false,uploadRemount=false,ignoreInput=false,preexisting=''}={}) {
   return `<!doctype html><meta charset="utf-8"><title>Isolated chat composer fixture</title>
   ${stripHash?'<script>history.replaceState(null,"",location.pathname)</script>':''}
   ${hiddenComposer?'<textarea id="prompt-textarea" hidden></textarea>':''}
@@ -33,6 +35,7 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
   ${noInput?'':'<input type="file" multiple accept="application/pdf,image/png" hidden>'}</main>
   <script>
   window.fixture={uploads:[],draft:'',sends:0};
+  ${preexisting?`const preexisting=document.createElement('div');preexisting.dataset.testid='attachment';preexisting.dataset.uploadState='uploading';preexisting.textContent=${JSON.stringify(preexisting)};document.querySelector('#attachments').append(preexisting);setTimeout(()=>{preexisting.dataset.uploadState='complete'},5000);`:''}
   let editor=document.querySelector('[contenteditable=true]');
   function track(event){
     ${rejectText?"setTimeout(()=>{editor.replaceChildren();window.fixture.draft='';},100);":''}
@@ -46,12 +49,13 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
     const chip=document.createElement('div');chip.className='fixture-attachment';
     ${plainChip?'':"chip.setAttribute('data-testid','attachment');"}
     chip.textContent=file.name;chip.dataset.uploadState='uploading';document.querySelector('#attachments').append(chip);
+    ${uploadRemount?"if(!window.fixture.uploadRemounted){window.fixture.uploadRemounted=true;const replacement=editor.cloneNode(true);editor.replaceWith(replacement);editor=replacement;editor.addEventListener('input',track);editor.addEventListener('drop',event=>{event.preventDefault();upload([...event.dataTransfer.files])});}":''}
     const response=await fetch('/paperquick-test-upload',{method:'POST',body:form});
     if(!response.ok){chip.dataset.uploadState='error';chip.textContent+=' Upload failed';return}
     window.fixture.uploads.push({name:file.name,size:file.size,sha:await crypto.subtle.digest('SHA-256',await file.arrayBuffer()).then(hash=>[...new Uint8Array(hash)].map(n=>n.toString(16).padStart(2,'0')).join(''))});
     chip.dataset.uploadState='complete';
   }}
-  document.querySelector('input[type=file]')?.addEventListener('change',event=>upload([...event.target.files]));
+  document.querySelector('input[type=file]')?.addEventListener('change',event=>{${ignoreInput?"if(!window.fixture.ignoredInput){window.fixture.ignoredInput=true;return;}":''}upload([...event.target.files])});
   editor.addEventListener('dragover',event=>event.preventDefault());
   editor.addEventListener('drop',event=>{event.preventDefault();upload([...event.dataTransfer.files])});
   document.querySelector('form').addEventListener('submit',event=>{event.preventDefault();window.fixture.sends++});
@@ -77,20 +81,24 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
     assert(worker.url().startsWith('chrome-extension://'));
   }
   const errors=[];context.on('page',page=>page.on('pageerror',error=>errors.push(error.message)));
-  const uploads=[];
+  const uploads=[];let chunkFailure=false;
   await context.route('**/*',async route=>{
     const url=new URL(route.request().url());
-    if(url.hostname==='127.0.0.1'){await route.continue();return;}
+    if(url.hostname==='127.0.0.1'){
+      if(mode==='flaky-chunk'&&!chunkFailure&&url.pathname.endsWith('/file/0/0')){chunkFailure=true;await route.fulfill({status:503,contentType:'application/json',body:'{"error":"temporary fixture interruption"}'});return;}
+      await route.continue();return;
+    }
     if(url.origin!=='https://chatgpt.com'){await route.abort();return;}
     if(new URL(route.request().url()).pathname==='/paperquick-test-upload'){
       uploads.push(route.request().postDataBuffer());
+      if(mode==='slow-upload')await new Promise(resolve=>setTimeout(resolve,22000));
       await route.fulfill({status:mode==='upload-failure'?500:200,contentType:'application/json',body:'{}'});return;
     }
-    await route.fulfill({contentType:'text/html',body:fixture({stripHash:mode==='stripped-hash',plainChip:mode==='plain-chip',noInput:mode==='drop',hiddenComposer:mode==='hidden-composer',remount:mode==='remount',nativeEditor:mode==='native-editor',rejectText:mode==='reject-text'})});
+    await route.fulfill({contentType:'text/html',body:fixture({stripHash:mode==='stripped-hash',plainChip:mode==='plain-chip',noInput:mode==='drop',hiddenComposer:mode==='hidden-composer',remount:mode==='remount',nativeEditor:mode==='native-editor',rejectText:mode==='reject-text',uploadRemount:mode==='upload-remount',ignoreInput:mode==='ignored-input',preexisting:mode==='existing-upload'?handoff.files[0].name:''})});
   });
   // Block all unrelated external requests; only fixture documents reach the bridge.
-  const handoff=await issue({image:mode!=='whole-paper',whole:mode==='whole-paper',local:['local-launch','no-extension','reuse','whole-paper'].includes(mode)});
-  const page=await context.newPage();await page.goto(handoff.url,{waitUntil:'commit'});
+  const handoff=await issue({image:!['whole-paper','existing-upload'].includes(mode),whole:mode==='whole-paper',local:['local-launch','no-extension','reuse','whole-paper'].includes(mode)});
+  phase='opening fixture';const page=await context.newPage();await page.goto(handoff.url,{waitUntil:'commit'});
   if(mode==='no-extension'){
     await page.waitForSelector('#setup');
     assert((await page.locator('textarea').inputValue()).includes('Selected passage'));
@@ -103,13 +111,26 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
     assert.equal(uploads.length,0);
     checks.push('A webpage that discards input reports failure and never claims the selection or attachments are ready');
   }else if(mode==='upload-failure'){
+    phase='waiting for draft';
     await page.waitForFunction(()=>window.fixture?.draft.includes('Selected passage'),{},{timeout:20000});
+    phase='waiting for upload failure state';
     await waitState('upload-error');
     assert((await page.evaluate(()=>window.fixture.draft)).includes('Selected passage'));
     checks.push('Upload failure reports its cause while selected text remains in the input box');
+  }else if(mode==='existing-upload'){
+    await page.waitForFunction(()=>window.fixture?.draft.includes('Selected passage'));
+    await new Promise(resolve=>setTimeout(resolve,1700));
+    assert.equal((await issue({status:true})).state,'uploading');
+    await waitState('ready');assert.equal(uploads.length,0);
+    checks.push('An existing uploading attachment is awaited to completion and is neither duplicated nor prematurely reported ready');
   }else{
   await page.waitForFunction(prompt=>window.fixture?.draft.replace(/\s+/g,' ').trim()===prompt.replace(/\s+/g,' ').trim(),handoff.prompt,{timeout:20000});
-  await page.waitForFunction(count=>window.fixture.uploads.length===count,handoff.files.length,{timeout:15000});
+  if(mode==='slow-upload'){
+    await new Promise(resolve=>setTimeout(resolve,2500));
+    assert.equal((await issue({status:true})).state,'uploading');
+    assert.equal((await page.evaluate(()=>window.fixture)).uploads.length,0);
+  }
+  await page.waitForFunction(count=>window.fixture.uploads.length===count,handoff.files.length,{timeout:mode==='slow-upload'?65000:20000});
   const result=await page.evaluate(()=>window.fixture);
   assert.equal(result.sends,0);
   assert.equal(result.uploads[0].sha,handoff.sourceSha256);
@@ -204,6 +225,7 @@ function fixture({stripHash=false,plainChip=false,noInput=false,hiddenComposer=f
   console.error(JSON.stringify(await issue({status:true})));
   process.exitCode=1;
 }).finally(async()=>{
+  clearTimeout(deadline);
   if(context)await context.close();
   backend.stdin.end(JSON.stringify({stop:true})+'\n');
 });

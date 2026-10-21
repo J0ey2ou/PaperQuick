@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "文献直达 · 右键查原文",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "文献选区与正文接入 ChatGPT，复用同篇对话，并把选定的回复存回原页批注。",
   "permissions": ["contextMenus", "activeTab", "scripting", "storage"],
   "host_permissions": ["https://api.crossref.org/*", "https://www.ebi.ac.uk/*", "https://export.arxiv.org/*", "https://api.semanticscholar.org/*", "https://api.unpaywall.org/*", "https://chatgpt.com/*", "http://127.0.0.1/*"],

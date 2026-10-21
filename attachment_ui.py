@@ -169,10 +169,17 @@ class AttachmentPreview:
         from reader_canvas import DocumentCanvas
         self.document_canvas=DocumentCanvas(self)
         self.canvas.configure(yscrollcommand=self.document_canvas.scrolled)
-        scroll.pack(side='right',fill='y');horizontal.pack(side='bottom',fill='x');self.canvas.pack(fill='both',expand=True);self.canvas.bind('<MouseWheel>',lambda e:self.canvas.yview_scroll(-int(e.delta/120),'units'))
+        scroll.pack(side='right',fill='y');horizontal.pack(side='bottom',fill='x');self.canvas.pack(fill='both',expand=True);self.canvas.bind('<MouseWheel>',self.scroll)
         self.canvas.bind('<Button-1>',lambda e:self.canvas.scan_mark(e.x,e.y));self.canvas.bind('<B1-Motion>',lambda e:self.canvas.scan_dragto(e.x,e.y,gain=1))
         self.status=tk.StringVar(value='附件独立连续阅读，不影响正文和笔记。');ttk.Label(self.frame,textvariable=self.status,style='Muted.TLabel',wraplength=360).pack(fill='x',pady=6)
         self.frame.after(100,self.poll)
+
+    def scroll(self,event):
+        if self.document_canvas.control_wheel(event):return 'break'
+        from ui_widgets import wheel_units
+        units=wheel_units(self.canvas,event.delta)
+        if units:self.canvas.yview_scroll(units,'units')
+        return 'break'
 
     def set_items(self,items,selected=None):
         self.items=[i for i in items if readable(i)];self.combo.configure(values=[f'{i+1}. {attachment_name(x)}' for i,x in enumerate(self.items)])

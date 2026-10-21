@@ -12,6 +12,10 @@ class DocumentCanvas:
         self.canvas.bind('<Button-2>',lambda e:self.canvas.scan_mark(e.x,e.y));self.canvas.bind('<B2-Motion>',lambda e:self.canvas.scan_dragto(e.x,e.y,gain=1))
 
     def reset(self):
+        if getattr(self,'zoom_job',None):
+            try:self.canvas.after_cancel(self.zoom_job)
+            except Exception:pass
+        self.zoom_job=None;self.zoom_steps=0;self.zoom_anchor=None;self.wheel_anchor=None
         self.r.selection_start=None
         if self.job:
             try:self.canvas.after_cancel(self.job)
@@ -36,7 +40,35 @@ class DocumentCanvas:
             self.sign=None;return self.adopt(path,page,count,image,chars,sizes)
         self.receive(page,image,chars)
         if changed:self.goto(page)
+        anchor=getattr(self,'zoom_anchor',None)
+        if anchor and anchor['page'] in self.layout:
+            x,y,_,_=self.coords(anchor['page'],[*anchor['point']]*2)
+            region=list(map(float,self.canvas.cget('scrollregion').split()))
+            self.canvas.xview_moveto(max(0,(x-anchor['x'])/max(1,region[2])))
+            self.canvas.yview_moveto(max(0,(y-anchor['y'])/max(1,region[3])))
+            self.zoom_anchor=None
         self.schedule()
+
+    def control_wheel(self,event):
+        if not getattr(event,'state',0)&0x4:return False
+        if not self.r.path:return True
+        context=self.context(event)
+        if context:self.wheel_anchor={'page':context[0],'point':context[1],'x':event.x,'y':event.y}
+        self.zoom_steps=max(-12,min(12,getattr(self,'zoom_steps',0)+event.delta/120))
+        if getattr(self,'zoom_job',None):self.canvas.after_cancel(self.zoom_job)
+        self.zoom_job=self.canvas.after(75,self.apply_wheel_zoom)
+        return True
+
+    def apply_wheel_zoom(self):
+        self.zoom_job=None
+        if self.r.closed:return
+        if self.r.loading:
+            self.zoom_job=self.canvas.after(75,self.apply_wheel_zoom);return
+        steps=getattr(self,'zoom_steps',0);self.zoom_steps=0
+        if steps:
+            self.zoom_anchor=getattr(self,'wheel_anchor',None);self.wheel_anchor=None
+            previous=self.r.scale;self.r.zoom(1.12**steps)
+            if previous==self.r.scale:self.zoom_anchor=None
 
     def receive(self,page,image,chars):
         if page not in self.layout:return

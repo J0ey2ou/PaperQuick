@@ -354,7 +354,7 @@ class LibraryWindow:
         panel=ttk.Frame(dialog,padding=18);panel.pack(fill='both',expand=True)
         ttk.Label(panel,text='逐文件导入结果',style='Section.TLabel').pack(anchor='w',pady=(0,12))
         text=tk.Text(panel,wrap='word');scroll=ttk.Scrollbar(panel,command=text.yview);scroll.pack(side='right',fill='y');text.configure(yscrollcommand=scroll.set);text.pack(fill='both',expand=True)
-        states={'imported':'已导入','linked':'已关联已有文献','error':'失败'}
+        states={'imported':'已导入','linked':'已关联已有文献','recovered':'已修复错误合并并恢复独立文献','error':'失败'}
         for item in report.get('files',[]):text.insert('end',f"{states.get(item['state'],item['state'])} · {item.get('seconds',0):.2f}s · {item['source']}\n"+(item.get('error','')+'\n' if item.get('error') else '')+'\n')
         text.configure(state='disabled')
 

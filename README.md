@@ -1,5 +1,7 @@
 # 文献直达 · PaperQuick
 
+**v3.6.1**：修复换行 DOI 被截断造成不同文献误合并；能在确认两个正文具有不同完整 DOI 后恢复旧错误关联，保留笔记并记录恢复备份。增强 ChatGPT 附件上传的控件重建、慢上传、分块重试与完成校验；支持保留当前对话重新上传正文。正文与附件比对页支持 **Ctrl＋滚轮缩放**，保留缩放位置。设置内“检查更新”继续连接最新正式版。
+
 **v3.6.0**：ChatGPT 回复可一键回存原讨论页批注；支持跨 PDF 的具体位置链接与带批注 PDF 副本导出。重新调整书页主题、标题栏筛选、高 DPI 表头和滚动，新增已有标签选择、全库重命名与删除。修复阅读页导入后列表不刷新，增加逐文件导入结果和进度，并优化列表查询及搜索响应。[本版使用与升级说明](docs/v3.6-upgrade.md)。设置内“检查更新”持续连接最新正式版。
 
 **v3.4.1 预览**：新增 ChatGPT 阅读互动，修复矩形选框、跨页选词截图遗漏后续页面及长图保存。[下载 Windows 预览包](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.4.1/PaperQuick-v3.4.1-Windows.zip) · [预览版说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.4.1) · [ChatGPT 接入步骤](docs/chatgpt-reading.md)。网页自动上传仍需在真实账号环境验证。

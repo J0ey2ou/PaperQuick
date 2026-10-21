@@ -56,18 +56,20 @@
     }).sort((a, b) => Number(b.isContentEditable) - Number(a.isContentEditable))[0];
 
   function notice(text, canRetry = false) {
+    if(globalThis.__paperQuickEmbedded){rpc('Ui',{detail:text}).catch(()=>{});return;}
+
     if (!panel) {
       panel = document.createElement('div');
       panel.id = 'paperquick-chat-status';
       const shadow = panel.attachShadow({mode: 'open'});
       const box = document.createElement('div');
-      box.style.cssText = 'position:fixed;right:20px;top:20px;z-index:2147483647;max-width:380px;padding:14px 18px;border:1px solid #a7c7e8;border-radius:12px;background:#f4f9ff;color:#163758;font:14px/1.6 system-ui;box-shadow:0 6px 28px #0002';
+      box.style.cssText = 'position:relative;box-sizing:border-box;width:100%;padding:8px 12px;border:1px solid #a7c7e8;border-radius:12px;background:#f4f9ff;color:#163758;font:14px/1.6 system-ui;box-shadow:0 6px 28px #0002';
       status = document.createElement('div');
       retry = document.createElement('button'); retry.textContent = '重试准备选区';
       const close = document.createElement('button'); close.textContent = '收起';
       close.onclick = () => { panel.hidden = true; };
       for (const button of [retry, close]) button.style.cssText = 'margin:8px 8px 0 0;padding:4px 10px;cursor:pointer';
-      box.append(status, retry, close); shadow.append(box); document.documentElement.append(panel);
+      box.append(status, retry, close); shadow.append(box);panel.style.cssText='display:block;position:relative;z-index:2147483647;max-height:28vh;overflow:auto';(document.body||document.documentElement).prepend(panel);
     }
     panel.hidden = false; status.textContent = '文献直达 · ' + text; retry.hidden = !canRetry;
     retry.onclick = typeof canRetry === 'function' ? canRetry : () => current && deliver(current.descriptor);
@@ -147,6 +149,7 @@
 
   function composerArea(editor) { return editor.closest('form') || editor.parentElement?.parentElement; }
   function attachmentState(editor, name) {
+    if(globalThis.PaperQuickUpload)return PaperQuickUpload.attachment(editor,name);
     const area = composerArea(editor);
     if (!area) return '';
     // A filename in the draft itself is not evidence of an attachment.
@@ -207,6 +210,9 @@
       if(chunks.reduce((total,chunk)=>total+chunk.byteLength,0)!==file.size)throw new Error('本地正文传输不完整，请保持软件运行后重试。');
       const types = {pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain', md: 'text/markdown', png: 'image/png'};
       const mime=types[file.name.split('.').pop().toLowerCase()]||'application/octet-stream';
+      if(globalThis.PaperQuickUpload){
+        await PaperQuickUpload.stage(new File(chunks,file.name,{type:mime}),()=>composer()||editor,globalThis.__paperQuickNativeFiles?async input=>{const marker=crypto.randomUUID().replaceAll('-','');input.setAttribute('data-paperquick-file',marker);try{await rpc('Attach',{descriptor:request,index,marker});}finally{input.removeAttribute('data-paperquick-file');}}:null);continue;
+      }
       try { await fileInput(composer()||editor); } catch (_) { /* Drop is the fallback; no OS file picker. */ }
       let accepted=false;
       for(let attempt=0;attempt<2&&!accepted;attempt++){
@@ -318,6 +324,18 @@
     finally { busy = false; }
   }
 
+  globalThis.__paperQuickAdapter={
+    retry:()=>current?deliver(current.descriptor):begin(),
+    bind:async()=>{await saveBinding();if(!replyContext)throw new Error('请先发送已准备的问题，再绑定当前对话。');},
+    reply:async()=>{
+      const selection=document.getSelection();const node=selection?.anchorNode;
+      const message=(node?.nodeType===1?node:node?.parentElement)?.closest('[data-message-author-role="assistant"]');
+      if(!selection?.toString().trim()||!message)throw new Error('请先在网页选中需要回存的回答文字。');
+      scanReplies();const button=message.querySelector('[data-paperquick-reply]');
+      if(!button)throw new Error('对话尚未绑定，请先发送问题并绑定当前对话。');
+      await button.onclick();
+    }
+  };
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id || message?.type !== 'paperQuickChatDeliver') return false;
     deliver(message.descriptor).then(respond, error => respond({ok: false, error: error.message}));

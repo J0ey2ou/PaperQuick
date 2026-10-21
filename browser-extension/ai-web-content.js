@@ -25,9 +25,11 @@
     if(current)try{await rpc('Status',{descriptor:current.descriptor,state,detail:detail.slice(0,600)});}catch(_){}
   }
   function notice(text){
+    if(globalThis.__paperQuickEmbedded){rpc('Ui',{detail:text}).catch(()=>{});return;}
+
     if(!ui){
       const host=document.createElement('div');host.id='paperquick-ai-web';const shadow=host.attachShadow({mode:'open'});
-      const box=document.createElement('section');box.style.cssText='position:fixed;right:16px;top:16px;max-width:330px;padding:14px;background:#f5f9f6;color:#264636;border:1px solid #adc7b6;border-radius:10px;z-index:2147483647;font:14px/1.6 system-ui;box-shadow:0 5px 24px #0002';
+      const box=document.createElement('section');box.style.cssText='position:relative;box-sizing:border-box;width:100%;padding:8px 12px;background:#f5f9f6;color:#264636;border-bottom:1px solid #adc7b6;font:13px/1.5 system-ui';host.style.cssText='display:block;position:relative;z-index:2147483647;max-height:28vh;overflow:auto';
       const label=document.createElement('div');box.append(label);
       const buttons={};
       for(const [id,title,action] of [
@@ -39,7 +41,7 @@
         const button=document.createElement('button');button.type='button';button.textContent=title;button.style.cssText='margin:8px 6px 0 0;padding:4px 8px;cursor:pointer';
         button.onmousedown=event=>event.preventDefault();button.onclick=()=>Promise.resolve(action()).catch(error=>notice(error.message));box.append(button);buttons[id]=button;
       }
-      shadow.append(box);document.documentElement.append(host);ui={host,label,buttons};
+      shadow.append(box);(document.body||document.documentElement).prepend(host);ui={host,label,buttons};
     }
     ui.host.hidden=false;ui.label.textContent='文献直达 · '+text;
   }
@@ -65,47 +67,19 @@
     }
     throw new Error('网页未能稳定保留文字，请重试；没有发送消息。');
   }
-  function attachment(name,includeSent=false){
-    const editor=composer(),area=(includeSent?document.querySelector('main'):editor?.closest('form'))||editor?.closest('main')||document.querySelector('main')||document.body;
-    const candidates=[...area.querySelectorAll('[data-upload-state],[data-testid*="attachment"],[data-testid*="file"],[class*="file-card"],[class*="attachment"],[class*="upload-file"],[class*="file-name"]')];
-    const node=candidates.find(el=>!el.contains(editor)&&el.textContent.includes(name));
-    if(!node)return '';
-    if(/error|failed/.test(node.dataset.uploadState||'')||/上传失败|无法上传|upload failed/i.test(node.textContent))return 'error';
-    if(/uploading|processing|pending|queued/.test(node.dataset.uploadState||'')||node.querySelector('[role="progressbar"],[aria-busy="true"],.animate-spin')||/上传中|处理中|uploading|processing/i.test(node.textContent))return 'uploading';
-    return 'ready';
-  }
+  const attachment=(name,includeSent=false)=>PaperQuickUpload.attachment(composer(),name,includeSent);
   async function attach(payload,descriptor){
     for(let index=0;index<payload.files.length;index++){
-      const metadata=payload.files[index];let state=attachment(metadata.name);
-      if(!state){
-        const pieces=[];let size=0;
-        for(let part=0;part<metadata.chunks;part++){
-          let data;
-          for(let retry=0;retry<3;retry++){try{data=await rpc('Chunk',{descriptor,index,part});break;}catch(error){if(retry===2)throw error;await sleep(300*(retry+1));}}
-          const piece=Uint8Array.from(atob(data.data),c=>c.charCodeAt(0));pieces.push(piece);size+=piece.length;
-        }
-        if(size!==metadata.size)throw new Error('正文传输不完整，请重试。');
-        const extension=metadata.name.toLowerCase().split('.').at(-1);
-        const mime={pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',png:'image/png'}[extension]||'text/plain';
-        const file=new File(pieces,metadata.name,{type:mime});
-        const transfer=new DataTransfer();transfer.items.add(file);
-        const input=[...document.querySelectorAll('input[type="file"]')].find(el=>!el.disabled);
-        if(input){input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));}
-        else{
-          const editor=composer();if(!editor)throw new Error('输入框已消失，请重试。');
-          for(const type of ['dragenter','dragover','drop'])editor.dispatchEvent(new DragEvent(type,{bubbles:true,cancelable:true,dataTransfer:transfer}));
-        }
+      const metadata=payload.files[index];const existing=attachment(metadata.name);
+      if(existing){await PaperQuickUpload.stage(new File([],metadata.name,{type:PaperQuickUpload.mime(metadata.name)}),composer);continue;}
+      const pieces=[];let size=0;
+      for(let part=0;part<metadata.chunks;part++){
+        let data;
+        for(let retry=0;retry<3;retry++){try{data=await rpc('Chunk',{descriptor,index,part});break;}catch(error){if(retry===2)throw error;await sleep(300*(retry+1));}}
+        const piece=Uint8Array.from(atob(data.data),c=>c.charCodeAt(0));pieces.push(piece);size+=piece.length;
       }
-      const until=Date.now()+120000;let seen=!!state;
-      while(Date.now()<until){
-        state=attachment(metadata.name);
-        if(state==='ready')break;
-        if(state==='error')throw new Error('网页报告正文上传失败，请检查附件额度与网络后重试。');
-        if(state)seen=true;
-        if(!seen&&until-Date.now()<116000)throw new Error('未能确认网页接收正文。可展开附件菜单后重试，或手动上传；也可在软件中关闭“附上正文”。');
-        await sleep(250);
-      }
-      if(state!=='ready')throw new Error('正文仍在处理，请完成后重试。');
+      if(size!==metadata.size)throw new Error('正文传输不完整，请重试。');
+      await PaperQuickUpload.stage(new File(pieces,metadata.name,{type:PaperQuickUpload.mime(metadata.name)}),composer,globalThis.__paperQuickNativeFiles?async input=>{const marker=crypto.randomUUID().replaceAll('-','');input.setAttribute('data-paperquick-file',marker);try{await rpc('Attach',{descriptor:descriptor,index,marker});}finally{input.removeAttribute('data-paperquick-file');}}:null);
     }
   }
   async function deliver(descriptor,payload){
@@ -140,6 +114,7 @@
     if(!bound)await bindCurrent();
     await rpc('Reply',{descriptor:bound,text,messageId:''});notice('回答已回存，可在软件“AI 阅读”页签查看并加入笔记。');
   }
+  globalThis.__paperQuickAdapter={retry:()=>current?deliver(current.descriptor):begin(),bind:bindCurrent,reply:returnSelection};
   chrome.runtime.onMessage.addListener((message,sender,respond)=>{
     if(sender.id!==chrome.runtime.id||message?.type!=='paperQuickChatDeliver')return false;
     bound='';deliver(message.descriptor).then(respond);return true;

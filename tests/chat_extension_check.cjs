@@ -18,6 +18,7 @@ async function contentFixture({draft = '', drop = false, editable = false, files
     getClientRects() { return [{width: 300, height: 40}]; }
     get isContentEditable() { return this.tagName === 'DIV'; }
     append(...nodes) { this.children.push(...nodes); }
+    prepend(...nodes) { this.children.unshift(...nodes); }
     replaceChildren(...nodes) { this._text = ''; this.children = nodes; }
     attachShadow() { return new Element('shadow'); }
     getAttribute(name) { return this.attributes[name] || null; }

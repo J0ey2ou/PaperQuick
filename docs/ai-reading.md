@@ -2,6 +2,10 @@
 
 阅读文献时选中文字，右键 → **询问 AI（网页 / API）** → 解释、总结、翻译、分析方法或自定义问题。右侧“AI 阅读”页签可选择工具与接入方式，编辑选文、问题，保存自己的提问模板。
 
+## Windows 内嵌网页
+
+模式选择“内嵌网页”，点击“在此打开聊天”，网页出现在右侧“聊天网页”页签，无需安装扩展或复制回答。首次在独立的内嵌配置中登录；点击网页回存按钮后，进入“回答 / 笔记”保存回答。保留未发送草稿，不会用下一次选区覆盖。Google OAuth 等登录方式可能不允许内嵌；可使用外部网页 / API 模式，不保证所有站点的账号流程都可内嵌。Mac 尚未接入此 Windows WebView2 组件。
+
 ## 网页账号
 
 可选择 ChatGPT、豆包、DeepSeek、Gemini、千问 / Qwen、Kimi。千问当前使用 `chat.qwen.ai` 网页入口。网页模式使用浏览器已有登录态，无需 API Key。首次请重新加载软件目录内的浏览器扩展 **2.6.0**，允许对应 AI 网站和本机地址访问，并刷新原有网页。
@@ -35,3 +39,12 @@ API 对话按文献、工具、接口地址和模型隔离；切换后不会把�
 开发验证使用隐藏 Tk 窗口、隔离文献库、模拟 API 和无头 MV3 网页夹具，覆盖六家网页的选文、上传、回存、复用；没有操作真实登录账号，也没有对真实付费接口发起测试。因此网页账号权限、实时 DOM 与真实模型可用性仍以用户自己的连接测试为准。
 
 接口配置依据：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[DeepSeek](https://api-docs.deepseek.com/)、[Gemini 兼容接口](https://ai.google.dev/gemini-api/docs/openai)、[千问百炼](https://help.aliyun.com/zh/model-studio/first-api-call-to-qwen)、[豆包火山方舟](https://api.volcengine.com/api-docs)、[Kimi](https://platform.kimi.com/docs/api/chat)。
+
+
+v3.8.1 修复内嵌页面白屏。聊天工具栏“重新显示”只恢复当前网页，不重新导航或清除草稿；关闭内嵌聊天返回 AI 阅读。遇到草稿提示时，先在网页发送或清空，再准备新选区。
+
+
+v3.8.2 将内嵌窗口改为直接托管 WebView2 Core，并统一 DPI 与兼容软件渲染。“重新显示”会等待组件确认，不重新导航；组件退出与网页加载失败会显示原因。显示状态可在 runtime/embedded-chat/display-diagnostics.jsonl 排查，其中不记录文献和对话内容。
+
+
+v3.8.3 内嵌页面不显示悬浮提示，改用软件上方的紧凑工具栏：重试准备、发送后绑定对话、回存选中的回答、返回笔记。更多菜单中有外部浏览器、重新显示和关闭。六家共享按文件类型匹配的上传逻辑，附件未确认完成时保留问题与错误提示。扩展为 2.6.1，更新外部扩展后重新加载并刷新页面。

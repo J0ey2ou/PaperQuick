@@ -16,13 +16,17 @@ class EmbeddedChat:
         self.tab=ttk.Frame(self.reader.notebook);self.reader.notebook.add(self.tab,text='聊天网页')
         bar=ttk.Frame(self.tab);bar.pack(fill='x',pady=4)
         self.status=tk.StringVar(value='首次在此登录，登录信息保存在本机独立配置中。')
-        ttk.Label(bar,textvariable=self.status,wraplength=360,style='Muted.TLabel').pack(fill='x')
+        self.status_label=ttk.Label(bar,textvariable=self.status,wraplength=360,style='Muted.TLabel')
+        self.status_label.pack(fill='x')
+        bar.bind('<Configure>',lambda event:self.status_label.configure(wraplength=max(180,event.width-8)),add='+')
         buttons=ttk.Frame(bar);buttons.pack(fill='x',pady=4)
-        buttons.columnconfigure((0,1),weight=1)
-        ttk.Button(buttons,text='在浏览器中打开',command=self.external).grid(row=0,column=0,sticky='ew',padx=(0,4),pady=2)
-        ttk.Button(buttons,text='重新显示',command=self.reveal).grid(row=0,column=1,sticky='ew',pady=2)
-        ttk.Button(buttons,text='回答 / 笔记',command=lambda:self.reader.notebook.select(self.panel.frame)).grid(row=1,column=0,sticky='ew',padx=(0,4),pady=2)
-        ttk.Button(buttons,text='关闭内嵌聊天',command=self.close).grid(row=1,column=1,sticky='ew',pady=2)
+        style=ttk.Style(self.tab);style.configure('Chat.TButton',padding=(6,3),width=0);style.configure('Chat.TMenubutton',padding=(6,3),width=0)
+        for column,(label,command) in enumerate((('重试准备',lambda:self.action('retry')),('绑定对话',lambda:self.action('bind')),('回存选中',lambda:self.action('reply')),('笔记',lambda:self.reader.notebook.select(self.panel.frame)))):
+            ttk.Button(buttons,text=label,style='Chat.TButton',command=command).grid(row=0,column=column,padx=(0,3),sticky='ew')
+        more=ttk.Menubutton(buttons,text='更多',style='Chat.TMenubutton');more.grid(row=0,column=4,sticky='e')
+        menu=tk.Menu(more,tearoff=False);more.configure(menu=menu)
+        for label,command in (('在浏览器中打开',self.external),('重新显示',self.reveal),('关闭内嵌聊天',self.close)):menu.add_command(label=label,command=command)
+        buttons.columnconfigure(4,weight=1)
         self.host=tk.Frame(self.tab,bg='#ffffff',width=380,height=600);self.host.pack(fill='both',expand=True)
         self.host.bind('<Map>',lambda event:self._sync_display(),add='+')
 
@@ -79,6 +83,15 @@ class EmbeddedChat:
             try:self.process.stdin.write('{"type":"sync-host"}\n');self.process.stdin.flush();return True
             except (OSError,ValueError):pass
         return False
+
+    def action(self,action):
+        if action not in ('retry','bind','reply'):return
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.stdin.write(json.dumps({'type':'adapter-action','action':action})+'\n');self.process.stdin.flush()
+                self.status.set({'retry':'正在重新准备问题和文献…','bind':'正在确认已发送的文献对话…','reply':'正在回存网页选中的回答…'}[action]);return
+            except (OSError,ValueError):pass
+        self.status.set('聊天组件未运行，请在 AI 阅读重新打开。')
 
     def reveal(self):
         """Reattach our owned child without navigating away from an unsent draft."""

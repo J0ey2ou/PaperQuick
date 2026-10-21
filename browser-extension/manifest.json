@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "文献直达 · 右键查原文",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "description": "阅读选文接入六家 AI 网页或软件 API；回复回存到文献笔记与批注。",
   "permissions": [
     "contextMenus",
@@ -29,6 +29,7 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "ai-upload.js",
         "chat-content.js"
       ],
       "run_at": "document_start"
@@ -52,6 +53,7 @@
       ],
       "js": [
         "ai-sites.js",
+        "ai-upload.js",
         "ai-web-content.js"
       ],
       "run_at": "document_start"

@@ -2,6 +2,8 @@
 
 **macOS 试用包**：[Apple 芯片与 Intel 下载](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.7.0-macos.1) · [Mac 安装说明与功能边界](docs/macos-preview.md)。按用户要求仅打包，未进行 Mac 功能测试，未 Apple 公证；Windows 正式更新通道不变。
 
+**v3.8.3**：修复聊天悬浮层遮挡和 PDF 控件误选；内嵌操作收进软件工具栏，六家共享上传与完成检测，并补充可信文件事件后备接入。扩展 2.6.1。[本版说明](docs/v3.8.3-upgrade.md)。
+
 **v3.8.2**：修复内嵌灰屏，直接使用原生 WebView2 控制器，统一 DPI 与兼容渲染，新增独立桌面中真实页签与渲染可见链验证。[本版说明](docs/v3.8.2-upgrade.md)。
 
 **v3.8.1**：修复内嵌聊天白屏，增加保留草稿的“重新显示”，补充原生窗口挂载与尺寸验证。详见 [修复版说明](docs/v3.8.1-upgrade.md)。
@@ -18,7 +20,7 @@
 
 从导师发来的一个标题，到课题文件夹里的一篇论文，再到阅读笔记和写作引用。Windows 本地文献工作区，连接 **查询 → 下载归档 → 分类与附件 → 阅读比对 → 关系探索 → 阅读回顾 → Word 写作**。
 
-[下载 v3.8.2 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.2/PaperQuick-v3.8.2-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.8.2) · [v3.8.2 升级指南](docs/v3.8.2-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
+[下载 v3.8.3 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.3/PaperQuick-v3.8.3-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.8.3) · [v3.8.3 升级指南](docs/v3.8.3-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
 
 **v3.2 新增**：Word 导入与分页预览、Word / PDF 互转、文献附件关联与并排比对、31 套 Word 引用格式，以及主题关键词、检索式、引用与被引探索和新文献追踪。
 

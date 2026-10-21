@@ -33,10 +33,14 @@ class EmbeddedChat : NativeWindow {
     readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer {Interval=200};
     readonly SynchronizationContext ui;
     readonly JavaScriptSerializer json=new JavaScriptSerializer {MaxJsonLength=8*1024*1024};
+    readonly List<string> staging=new List<string>();
+    readonly Dictionary<string,string> nativeFiles=new Dictionary<string,string>();
     readonly Dictionary<string,string> replies=new Dictionary<string,string>();
     readonly Dictionary<string,string> homes=new Dictionary<string,string>{{"chatgpt.com","/"},{"www.doubao.com","/chat/"},{"chat.deepseek.com","/"},{"gemini.google.com","/app"},{"chat.qwen.ai","/"},{"www.kimi.com","/"}};
     CoreWebView2Controller controller;
     CoreWebView2 core;
+    CoreWebView2Environment environment;
+    readonly TaskCompletionSource<bool> browserEnded=new TaskCompletionSource<bool>();
     string active="",pending="",lastDisplay="";
     bool ready=false,closed=false,fixtureVisible=true;
     int lastX=int.MinValue,lastY=int.MinValue;
@@ -48,10 +52,15 @@ class EmbeddedChat : NativeWindow {
         CreateHandle(new CreateParams {Parent=parent,Style=0x56000000,X=0,Y=0,Width=1,Height=1,Caption="PaperQuick embedded chat"});
         timer.Tick+=(s,e)=>{if(!IsWindow(parent)){Close();return;}try{SyncHost(false);}catch{Status("error","聊天显示通道异常，请关闭内嵌聊天后重试。");}};timer.Start();
     }
-    void Close(){
+    async void Close(){
         if(closed)return;closed=true;timer.Stop();timer.Dispose();
-        try{if(controller!=null)controller.Close();}
-        finally{controller=null;core=null;if(Handle!=IntPtr.Zero)DestroyHandle();application.ExitThread();}
+        try{if(controller!=null)controller.Close();}catch{}
+        controller=null;core=null;if(Handle!=IntPtr.Zero)DestroyHandle();
+        // Release this owned runtime normally before removing its staging files
+        // or reusing the profile. Never terminate a browser/user process.
+        if(environment!=null)await Task.WhenAny(browserEnded.Task,Task.Delay(5000));
+        foreach(string file in staging){try{File.Delete(file);Directory.Delete(Path.GetDirectoryName(file),false);}catch{}}
+        application.ExitThread();
     }
     bool SyncHost(bool acknowledge){
         if(closed||Handle==IntPtr.Zero||!IsWindow(parent))return false;
@@ -82,7 +91,8 @@ class EmbeddedChat : NativeWindow {
         // The reader is system-DPI-aware; the helper uses the same awareness before
         // creating any HWND. Software compositing avoids cross-process GPU surfaces.
         var options=new CoreWebView2EnvironmentOptions();options.AdditionalBrowserArguments="--disable-gpu";
-        var environment=await CoreWebView2Environment.CreateAsync(null,profile,options);
+        environment=await CoreWebView2Environment.CreateAsync(null,profile,options);
+        environment.BrowserProcessExited+=(s,e)=>browserEnded.TrySetResult(true);
         if(closed)return;
         var created=await environment.CreateCoreWebView2ControllerAsync(Handle);
         if(closed){created.Close();return;}
@@ -112,9 +122,9 @@ class EmbeddedChat : NativeWindow {
             }catch{if(id!=null)core.PostWebMessageAsJson(json.Serialize(new {id=id,result=new {ok=false,error="内嵌接入未完成，请重新准备选区或改用浏览器入口。"}}));}
         };
         string shim=@"(()=>{if(window.top!==window)return;const hosts=['chatgpt.com','www.doubao.com','chat.deepseek.com','gemini.google.com','chat.qwen.ai','www.kimi.com'];if(location.protocol!=='https:'||!hosts.includes(location.hostname))return;
-const bridge=window.chrome.webview;let n=0;const pending=new Map();bridge.addEventListener('message',event=>{const item=pending.get(event.data.id);if(item){pending.delete(event.data.id);clearTimeout(item.timer);item.resolve(event.data.result);}});
+globalThis.__paperQuickEmbedded=true;globalThis.__paperQuickNativeFiles=true;const bridge=window.chrome.webview;let n=0;const pending=new Map();bridge.addEventListener('message',event=>{const item=pending.get(event.data.id);if(item){pending.delete(event.data.id);clearTimeout(item.timer);item.resolve(event.data.result);}});
 Object.defineProperty(window.chrome,'runtime',{configurable:true,value:{id:'paperquick-embedded',onMessage:{addListener:()=>{}},sendMessage:request=>new Promise((resolve,reject)=>{const id=crypto.randomUUID()+':'+(++n);const timer=setTimeout(()=>{pending.delete(id);reject(new Error('本机连接超时，请重新准备选区。'));},25000);pending.set(id,{resolve,timer});bridge.postMessage(JSON.stringify({id,request}));})}});
-"+File.ReadAllText(Path.Combine(scripts,"ai-sites.js"))+"\nif(location.hostname==='chatgpt.com'){"+File.ReadAllText(Path.Combine(scripts,"chat-content.js"))+"\n}else{"+File.ReadAllText(Path.Combine(scripts,"ai-web-content.js"))+"\n}})();";
+"+File.ReadAllText(Path.Combine(scripts,"ai-sites.js"))+"\n"+File.ReadAllText(Path.Combine(scripts,"ai-upload.js"))+"\nif(location.hostname==='chatgpt.com'){"+File.ReadAllText(Path.Combine(scripts,"chat-content.js"))+"\n}else{"+File.ReadAllText(Path.Combine(scripts,"ai-web-content.js"))+"\n}})();";
         await core.AddScriptToExecuteOnDocumentCreatedAsync(shim);
         ready=true;Status("initialized","内嵌聊天已启动；首次请在此登录。");if(pending!="")await Navigate(pending);
     }catch(Exception error){Status("error","无法初始化内嵌网页（"+error.GetType().Name+"）。请确认已安装 WebView2 运行时，或使用浏览器 / API 模式。");Close();}}
@@ -159,6 +169,10 @@ Object.defineProperty(window.chrome,'runtime',{configurable:true,value:{id:'pape
             if(active!=""){var p=await Local(active,"",null);string expected=Convert.ToString(p["url"]);if(expected=="")expected=Convert.ToString(p["home"]);if(expected==url)return new {ok=true,descriptor=active};}
             return new {ok=true,descriptor="",replyDescriptor=reply};
         }
+        if(type=="paperQuickChatUi"){
+            if(active=="")throw new Exception("No active handoff");
+            string detail=Convert.ToString(request["detail"]);Status("adapter",detail.Length>600?detail.Substring(0,600):detail);return new {ok=true};
+        }
         string token=Convert.ToString(request["descriptor"]);
         if(type=="paperQuickChatReply"){
             if(!replies.ContainsKey(token)||replies[token]!=url)throw new Exception("Reply not authorized");
@@ -172,12 +186,49 @@ Object.defineProperty(window.chrome,'runtime',{configurable:true,value:{id:'pape
         if(type=="paperQuickChatStatus")return await Local(token,"/status",new {state=request["state"],detail=request.ContainsKey("detail")?request["detail"]:""});
         var payload=await Local(token,"",null);string target=Convert.ToString(payload["url"]);if(target=="")target=Convert.ToString(payload["home"]);
         if(url!=target)throw new Exception("Route mismatch");
+        if(type=="paperQuickChatAttach"){
+            int index=Convert.ToInt32(request["index"]);string marker=Convert.ToString(request["marker"]);
+            if(!Regex.IsMatch(marker,@"^[a-f0-9]{32}$"))throw new Exception("Invalid marker");
+            var files=payload["files"] as System.Collections.IList;
+            if(files==null||index<0||index>=files.Count)throw new Exception("Invalid file");
+            var metadata=(Dictionary<string,object>)files[index];string name=Convert.ToString(metadata["name"]);
+            if(String.IsNullOrEmpty(name)||Path.GetFileName(name)!=name)throw new Exception("Invalid filename");
+            var document=json.Deserialize<Dictionary<string,object>>(await core.CallDevToolsProtocolMethodAsync("DOM.getDocument","{}"));
+            int rootId=Convert.ToInt32(((Dictionary<string,object>)document["root"])["nodeId"]);
+            var match=json.Deserialize<Dictionary<string,object>>(await core.CallDevToolsProtocolMethodAsync("DOM.querySelector",json.Serialize(new {nodeId=rootId,selector="input[type=file][data-paperquick-file=\""+marker+"\"]"})));
+            int nodeId=Convert.ToInt32(match["nodeId"]);if(nodeId<=0)throw new Exception("Input remounted");
+            string key=token+":"+index,path;
+            if(!nativeFiles.TryGetValue(key,out path)){
+                if(staging.Count>=16)throw new Exception("Too many staged files");
+                path=Path.Combine(Path.GetDirectoryName(profile),"staging",Guid.NewGuid().ToString("N"),name);
+                Directory.CreateDirectory(Path.GetDirectoryName(path));staging.Add(path);
+                using(var stream=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read)){
+                    int chunks=Convert.ToInt32(metadata["chunks"]);long expected=Convert.ToInt64(metadata["size"]);
+                    if(chunks<=0||expected<=0||expected>64*1024*1024)throw new Exception("Invalid file size");
+                    for(int part=0;part<chunks;part++){
+                        var block=await Local(token,"/file/"+index+"/"+part,null);
+                        var bytes=Convert.FromBase64String(Convert.ToString(block["data"]));await stream.WriteAsync(bytes,0,bytes.Length);
+                    }
+                    if(stream.Length!=expected)throw new Exception("Incomplete document");
+                }
+                nativeFiles[key]=path;
+            }
+            if(closed||token!=active||Route(core.Source)!=url)throw new Exception("Page changed during staging");
+            await core.CallDevToolsProtocolMethodAsync("DOM.setFileInputFiles",json.Serialize(new {nodeId=nodeId,files=new string[]{path}}));
+            return new {ok=true};
+        }
         if(type=="paperQuickChatRoute"||type=="paperQuickChatPayload")return new {ok=true,payload=payload};
         if(type=="paperQuickChatChunk"){
             int index=Convert.ToInt32(request["index"]),part=Convert.ToInt32(request["part"]);if(index<0||part<0)throw new Exception("Invalid chunk");
             var result=await Local(token,"/file/"+index+"/"+part,null);result["ok"]=true;return result;
         }
         throw new Exception("Unknown request");
+    }
+    async Task Adapter(string action){
+        if(action!="retry"&&action!="bind"&&action!="reply")throw new Exception("Unknown action");
+        if(core==null)throw new Exception("Browser not ready");
+        string result=await core.ExecuteScriptAsync("(()=>{const a=globalThis.__paperQuickAdapter;if(!a)return false;Promise.resolve(a["+json.Serialize(action)+"]()).catch(e=>chrome.runtime.sendMessage({type:'paperQuickChatUi',detail:e.message}));return true;})()");
+        if(result!="true")Status("error","网页尚未连接文献，请等待加载完成后重新准备。");
     }
     [STAThread] static void Main(string[] args){
         if(args.Length!=3)return;
@@ -206,11 +257,12 @@ Object.defineProperty(window.chrome,'runtime',{configurable:true,value:{id:'pape
                             string kind=Convert.ToString(command["type"]);
                             if(kind=="close")host.Close();
                             else if(kind=="sync-host")host.SyncHost(true);
+                            else if(kind=="adapter-action")await host.Adapter(Convert.ToString(command["action"]));
                             else if(kind=="fixture-probe"&&host.fixture!="")await host.Probe();
                             else if(kind=="fixture-visibility"&&host.fixture!=""){host.fixtureVisible=Convert.ToBoolean(command["visible"]);host.SyncHost(false);}
                             else if(kind=="fixture-submit"&&host.fixture!="")await host.core.ExecuteScriptAsync("window.pqFixtureSubmit()");
-                            else if(kind=="fixture-bind"&&host.fixture!="")await host.core.ExecuteScriptAsync("[...document.querySelector('#paperquick-ai-web').shadowRoot.querySelectorAll('button')].find(b=>b.textContent.includes('发送后绑定')).click()");
-                            else if(kind=="fixture-reply"&&host.fixture!="")await host.core.ExecuteScriptAsync("(()=>{const h=document.querySelector('#paperquick-ai-web');if(!h){document.querySelector('[data-paperquick-reply]').click();return;}const range=document.createRange();range.selectNodeContents(document.querySelector('.markdown'));const s=getSelection();s.removeAllRanges();s.addRange(range);[...h.shadowRoot.querySelectorAll('button')].find(b=>b.textContent.includes('回存选中')).click();})()");
+                            else if(kind=="fixture-bind"&&host.fixture!="")await host.Adapter("bind");
+                            else if(kind=="fixture-reply"&&host.fixture!="")await host.core.ExecuteScriptAsync("(()=>{const range=document.createRange();range.selectNodeContents(document.querySelector('.markdown'));const s=getSelection();s.removeAllRanges();s.addRange(range);window.__paperQuickAdapter.reply().catch(e=>chrome.runtime.sendMessage({type:'paperQuickChatUi',detail:e.message}));})()");
                             else await host.Navigate(Convert.ToString(command["url"]));
                         }
                         catch(Exception error){host.Status("error",error.Message.Contains("草稿")?error.Message:"无法完成本次聊天操作，请重新准备或使用浏览器入口。");}

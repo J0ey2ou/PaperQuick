@@ -40,6 +40,9 @@ class EmbeddedUiTests(unittest.TestCase):
             with patch('webbrowser.open') as browser:view.external();browser.assert_called_once_with(view.url)
             view.events.put({'state':'opened','detail':'已打开','url':'https://chatgpt.com/#next'});view.poll()
             self.assertEqual(view.url,'https://chatgpt.com/#next')
+            process.stdin.write.reset_mock();view.action('reply')
+            self.assertEqual(json.loads(process.stdin.write.call_args.args[0]),{'type':'adapter-action','action':'reply'})
+            self.assertIn('正在回存',view.status.get())
             view.close();self.assertEqual(notebook.tab(view.tab,'state'),'hidden')
         finally:root.destroy()
 
@@ -52,7 +55,10 @@ class EmbeddedTests(unittest.TestCase):
     def test_hidden_generic_adapter_roundtrip(self):
         self.run_provider('deepseek')
 
-    def run_provider(self,provider,*,mapped=False):
+    def test_hidden_doubao_trusted_pdf_input(self):
+        self.run_provider('doubao',trusted=True)
+
+    def run_provider(self,provider,*,mapped=False,trusted=False):
         if mapped:
             # This branch may map windows ONLY on an explicitly created private
             # desktop. A stray invocation on the user's desktop fails before Tk.
@@ -68,11 +74,18 @@ class EmbeddedTests(unittest.TestCase):
         root_path=Path(__file__).resolve().parents[1]
         base=root_path/'build/embedded-tests';base.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=base) as temporary:
-            folder=Path(temporary);source=folder/'fixture.txt';source.write_text('Isolated fixture paper','utf-8')
+            folder=Path(temporary);source=folder/'fixture.pdf'
+            from test_reader import text_pdf
+            text_pdf(source)
             lib=Library(folder/'store');rid=lib.import_document(source);bridge=ChatBridge(lib.root)
-            fixture=folder/'fixture.html';fixture.write_text('''<!doctype html><main><form><div id="prompt-textarea" class="ProseMirror" contenteditable="true" role="textbox" style="min-height:40px"></div><div id="attachments"></div></form><input type="file">
+            fixture=folder/'fixture.html';html='''<!doctype html><main><form><div id="prompt-textarea" class="ProseMirror" contenteditable="true" role="textbox" style="min-height:40px"></div><div id="attachments"></div></form><input type="file" accept="application/pdf">
 <script>const editor=document.querySelector('[contenteditable]');document.querySelector('input').onchange=e=>{for(const file of e.target.files){const chip=document.createElement('div');chip.dataset.testid='attachment';chip.dataset.uploadState='complete';chip.textContent=file.name;document.querySelector('#attachments').append(chip);}};
-window.pqFixtureSubmit=()=>{const turn=document.createElement('article');turn.dataset.testid='conversation-turn-1';const user=document.createElement('div');user.dataset.messageAuthorRole='user';user.textContent=editor.innerText;turn.append(user,...document.querySelector('#attachments').children);document.querySelector('main').prepend(turn);editor.replaceChildren();history.pushState(null,'','/c/12345678-native-fixture');const answer=document.createElement('div');answer.dataset.messageAuthorRole='assistant';answer.innerHTML='<div class="markdown">Native fixture answer</div>';turn.append(answer);};</script></main>'''.replace('/c/12345678-native-fixture','/a/chat/s/12345678-native-fixture' if provider=='deepseek' else '/c/12345678-native-fixture'),'utf-8')
+window.pqFixtureSubmit=()=>{const turn=document.createElement('article');turn.dataset.testid='conversation-turn-1';const user=document.createElement('div');user.dataset.messageAuthorRole='user';user.textContent=editor.innerText;turn.append(user,...document.querySelector('#attachments').children);document.querySelector('main').prepend(turn);editor.replaceChildren();history.pushState(null,'','/c/12345678-native-fixture');const answer=document.createElement('div');answer.dataset.messageAuthorRole='assistant';answer.innerHTML='<div class="markdown">Native fixture answer</div>';turn.append(answer);};</script></main>'''
+            import hashlib
+            html=html.replace('onchange=e=>{','onchange=async e=>{').replace("chip.dataset.uploadState='complete';", "const sum=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer()))).map(x=>x.toString(16).padStart(2,'0')).join('');chip.dataset.uploadState=sum==='PDF_SHA'?'complete':'error';").replace('PDF_SHA',hashlib.sha256(source.read_bytes()).hexdigest())
+            if trusted:html=html.replace('onchange=async e=>{','onchange=async e=>{if(!e.isTrusted)return;')
+            target='/a/chat/s/12345678-native-fixture' if provider=='deepseek' else '/chat/12345678-native-fixture' if provider=='doubao' else '/c/12345678-native-fixture'
+            fixture.write_text(html.replace('/c/12345678-native-fixture',target),'utf-8')
             root=tk.Tk()
             if mapped:
                 root.geometry('1000x850+0+0')

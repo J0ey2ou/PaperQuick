@@ -159,7 +159,7 @@ def import_style(path, custom_dir) -> str:
 
 
 def _node_executable() -> Path:
-    bundled = asset_directory() / "vendor" / "node.exe"
+    bundled = asset_directory() / "vendor" / ("node" if sys.platform=='darwin' else "node.exe")
     if bundled.is_file():
         return bundled
     # Development fallback only; production builds must include their own runtime.

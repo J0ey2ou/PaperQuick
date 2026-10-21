@@ -65,25 +65,23 @@ class LibraryWindow:
         scope_label.grid(row=0,column=0,sticky='w',padx=(0,12))
         self._search_job=None
         self.search.trace_add('write',self.schedule_search)
-        filters=ttk.Frame(filterbar,style='Card.TFrame')
         self.status_filter=tk.StringVar(value='全部状态');self.rating_filter=tk.StringVar(value='全部评分');self.tag_filter=tk.StringVar(value='全部标签')
-        for variable,values,width in [(self.status_filter,['全部状态',*READING_STATES],9),(self.rating_filter,['全部评分','未评分',*[f'{i} 星及以上' for i in range(1,6)]],11),(self.tag_filter,['全部标签'],13)]:
-            box=ttk.Combobox(filters,textvariable=variable,values=values,width=width,state='readonly',style='Filter.TCombobox');box.pack(side='left',padx=(6,0));box.bind('<<ComboboxSelected>>',lambda _:self.refresh_records())
-            if variable is self.tag_filter:self.tag_filter_box=box
-        search_entry=ttk.Entry(filterbar,textvariable=self.search,width=14);search_entry.grid(row=0,column=1,sticky='ew')
+        search_entry=ttk.Entry(filterbar,textvariable=self.search,width=20);search_entry.grid(row=0,column=1,sticky='ew')
+        self.search_entry=search_entry
         filterbar.columnconfigure(1,weight=1)
-        def layout_filters(event):
-            compact=event.width<scope_label.winfo_reqwidth()+search_entry.winfo_reqwidth()+filters.winfo_reqwidth()+24
-            filters.grid(row=1 if compact else 0,column=0 if compact else 2,columnspan=2 if compact else 1,sticky='e',pady=(6,0) if compact else 0)
-        filterbar.bind('<Configure>',layout_filters)
+        self.filter_summary=tk.StringVar(value='点击列名排序 · ▾ 筛选')
+        ttk.Label(filterbar,textvariable=self.filter_summary,style='CardMuted.TLabel').grid(row=0,column=2,padx=10)
+        ttk.Button(filterbar,text='清除筛选',command=self.clear_column_filters,style='Subtle.TButton').grid(row=0,column=3)
+        from library_table import TableState
+        self.table_state=TableState()
         table=ttk.Frame(right,style='Card.TFrame');table.pack(fill='both',expand=True)
         columns=('title','year','project','tags','status','rating','pdf')
         self.tree=ttk.Treeview(table,columns=columns,show='headings',selectmode='extended',height=4)
         from tkinter.font import Font
         heading_font=Font(self.win,font=(FONT,10,'bold'))
         for key,label,width in zip(columns,('论文标题','年份','主课题','标签','阅读状态','评分','全文'),(310,76,150,140,110,110,100)):
-            minimum=max(heading_font.measure(label)+28,220 if key=='title' else 70)
-            self.tree.heading(key,text=label);self.tree.column(key,width=max(width,minimum),minwidth=minimum,stretch=key=='title',anchor='w' if key in ('title','project','tags') else 'center')
+            minimum=max(heading_font.measure(label+' ↓ ·  ▾')+24,220 if key=='title' else 70)
+            self.tree.heading(key,text=label+'  ▾',command=lambda k=key:self.sort_column(k));self.tree.column(key,width=max(width,minimum),minwidth=minimum,stretch=key=='title',anchor='w' if key in ('title','project','tags') else 'center')
         self.tree.tag_configure('even',background=PANEL)
         self.tree.tag_configure('odd',background='#132237')
         self.tree.tag_configure('read',foreground='#77ddba')
@@ -92,7 +90,8 @@ class LibraryWindow:
         self.tree.configure(yscrollcommand=scroll.set,xscrollcommand=horizontal.set)
         table.rowconfigure(0,weight=1);table.columnconfigure(0,weight=1)
         self.tree.grid(row=0,column=0,sticky='nsew');scroll.grid(row=0,column=1,sticky='ns');horizontal.grid(row=1,column=0,sticky='ew')
-        self.tree.bind('<Double-1>',lambda _:self.open_pdf());self.tree.bind('<<TreeviewSelect>>',self.detail)
+        self.tree.bind('<Button-1>',self.column_click,add='+')
+        self.tree.bind('<Double-1>',lambda e:self.open_pdf() if self.tree.identify_region(e.x,e.y)=='cell' else None);self.tree.bind('<<TreeviewSelect>>',self.detail)
         self.context_menu=tk.Menu(self.win,tearoff=False,bg=PANEL,fg=FG,activebackground='#1c485f',activeforeground=ACCENT)
         for title,command in [('下载原文（打开下载页面）',self.download_selected),('下载并自动归档',lambda:self.download_selected(archive=True)),('识别 / 修改显示名称',self.rename_selected),('选择所有文献',lambda:self.select_all(False)),('选择所有已下载文献',lambda:self.select_all(True)),('阅读正文',self.open_pdf),('关联已下载 PDF',self.attach_pdf),('编辑信息',self.edit),('分配课题',self.assign)]:
             self.context_menu.add_command(label=title,command=command)
@@ -172,7 +171,7 @@ class LibraryWindow:
     def refresh(self):
         previous=self.current_project
         records=self.library.records(summary=True);self._records_cache=records
-        tags=sorted({t for r in records for t in r.get('tags',[])},key=str.casefold);self.tag_filter_box.configure(values=['全部标签',*tags])
+        tags=sorted({t for r in records for t in r.get('tags',[])},key=str.casefold)
         if self.tag_filter.get() not in ['全部标签',*tags]:self.tag_filter.set('全部标签')
         for value,count in zip(self.metrics,(len(records),sum(any(a.get('role')=='primary' for a in readable_attachments(r)) for r in records),sum(r['status']=='已读' for r in records),len(self.library.projects()))):value.set(str(count))
         project_items=self.library.projects();children={}
@@ -210,7 +209,10 @@ class LibraryWindow:
         index=0
         projects={p['id']:p['name'] for p in self.project_rows}
         scope=self._project_scopes.get(self.current_project) if self.current_project else None
-        for r in self._records_cache:
+        from library_table import values
+        rows={r['id']:values(r,projects) for r in self._records_cache}
+        for r in self.table_state.ordered(self._records_cache,rows):
+            if not self.table_state.matches(rows[r['id']]):continue
             if scope is not None and not set(r['projects']) & scope:continue
             if query not in ' '.join(str(r.get(k,'')) for k in ('title','display_name','doi','authors','keywords','tags')).lower():continue
             if self.status_filter.get()!='全部状态' and r['status']!=self.status_filter.get():continue
@@ -221,6 +223,42 @@ class LibraryWindow:
             self.tree.insert('','end',iid=r['id'],values=(display_name(r),r['year'],projects.get(r['primary_project'],'未分类'),'；'.join(r.get('tags',[])),r['status'],'★'*rating or '未评分','已归档' if any(a.get('role')=='primary' for a in readable_attachments(r)) else '待添加'),tags=('odd' if index%2 else 'even','read' if r['status']=='已读' else ''))
             index+=1
             if r['id'] in selected:self.tree.selection_add(r['id'])
+
+        from library_table import LABELS
+        for key,label in LABELS.items():
+            indicator=(' ↓' if self.table_state.descending else ' ↑') if self.table_state.sort_key==key else ''
+            self.tree.heading(key,text=label+indicator+(' ·' if key in self.table_state.filters else '')+'  ▾')
+        count=len(self.table_state.filters)
+        self.filter_summary.set(f'{index} 篇 · {count} 列已筛选' if count else f'{index} 篇 · 点击列名排序 / ▾ 筛选')
+
+    def sort_column(self,key):
+        self.table_state.sort(key);self.refresh_records()
+
+    def clear_column_filters(self):
+        self.table_state.filters.clear();self.status_filter.set('全部状态');self.rating_filter.set('全部评分');self.tag_filter.set('全部标签');self.refresh_records()
+
+    def column_choices(self,key):
+        from library_table import values
+        projects={p['id']:p['name'] for p in self.project_rows};scope=self._project_scopes.get(self.current_project) if self.current_project else None
+        result=set()
+        for record in self._records_cache:
+            if scope is not None and not set(record['projects']) & scope:continue
+            row=values(record,projects)
+            if not self.table_state.matches(row,ignore=key):continue
+            value=row[key];result.update(value or [''] if isinstance(value,list) else [value])
+        return sorted(result,key=lambda v:(int(v) if key=='rating' else v.casefold()))
+
+    def column_click(self,event):
+        if self.tree.identify_region(event.x,event.y)!='heading':return
+        index=int(self.tree.identify_column(event.x)[1:])-1;columns=list(self.tree['columns'])
+        if not 0<=index<len(columns):return
+        widths=[int(self.tree.column(c,'width')) for c in columns]
+        edge=sum(widths[:index+1])-round(sum(widths)*self.tree.xview()[0])
+        if edge-27<=event.x<=edge-4:
+            from library_table import ColumnFilter
+            old=getattr(self,'column_popup',None)
+            if old and old.win.winfo_exists():old.win.destroy()
+            self.column_popup=ColumnFilter(self,columns[index],event.x_root,event.y_root+10);return 'break'
 
     def selected(self,one=False):
         ids=self.tree.selection()
@@ -361,7 +399,7 @@ class LibraryWindow:
     def reveal_import(self,result,pid):
         if not result.get('paper_ids'):return
         self.current_project=pid
-        self.search.set('');self.status_filter.set('全部状态');self.rating_filter.set('全部评分');self.tag_filter.set('全部标签')
+        self.table_state.filters.clear();self.search.set('');self.status_filter.set('全部状态');self.rating_filter.set('全部评分');self.tag_filter.set('全部标签')
         self.refresh()
         visible=[rid for rid in result['paper_ids'] if self.tree.exists(rid)]
         if visible:self.tree.selection_set(visible);self.tree.focus(visible[0]);self.tree.see(visible[0]);self.detail()

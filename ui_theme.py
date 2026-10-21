@@ -1,10 +1,12 @@
 """Shared, accessible palettes and typography for the desktop interface."""
 import tkinter as tk
 from tkinter import ttk
+import sys
 
 FONT = 'Microsoft YaHei UI'
 ENGLISH = 'Segoe UI Variable Text'
 DISPLAY = 'Segoe UI Variable Display'
+if sys.platform=='darwin':FONT='PingFang SC';ENGLISH='Helvetica Neue';DISPLAY='Helvetica Neue'
 _CORE = ('BG', 'PANEL', 'SURFACE', 'INPUT', 'FG', 'MUTED', 'ACCENT', 'LINE')
 BASE = dict(zip(_CORE, ('#101722', '#192331', '#243247', '#121d2b',
                         '#edf3fb', '#a5b4c8', '#99c5ff', '#35475f')))
@@ -260,6 +262,8 @@ def install_theme(root):
     style.configure('ActiveNav.TButton', background=SURFACE, foreground=FG,
                     padding=(15, 12), borderwidth=0, font=(FONT, 11, 'bold'))
     style.map('ActiveNav.TButton', background=[('active', tokens['hover'])], foreground=[('!disabled', FG)])
+    from ui_controls import install_controls
+    install_controls(root,style,{key:globals()[key] for key in _CORE},tokens)
     root._paperquick_theme = CURRENT_SKIN
     _queue_window_chrome(root)
     return style

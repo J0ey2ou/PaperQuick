@@ -30,7 +30,7 @@ def run(pattern='test_*.py'):
         for method in ('focus_set','focus_force','lift','tkraise'):stack.enter_context(patch.object(tk.Misc,method,lambda *a,**k:None))
         stack.enter_context(patch.object(tk.Wm,'deiconify',lambda *a,**k:None))
         for method in ('clipboard_append','clipboard_clear','clipboard_get'):stack.enter_context(patch.object(tk.Misc,method,forbidden))
-        for target in ('webbrowser.open','os.startfile','PIL.ImageGrab.grab','PIL.ImageGrab.grabclipboard'):
+        for target in ('webbrowser.open','os.startfile','PIL.ImageGrab.grab','PIL.ImageGrab.grabclipboard','embedded_chat.EmbeddedChat.open'):
             stack.enter_context(patch(target,forbidden))
         stack.enter_context(patch('ui_theme.window_chrome'))
         suite=unittest.defaultTestLoader.discover(str(BASE/'tests'),pattern=pattern)

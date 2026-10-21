@@ -134,7 +134,7 @@ class ChatBridge:
             item=self._request(token)
             target=(item['url'] or PROVIDERS[item['provider']]['web'])+f'#paperquick={self.server.server_port}.{token}'
             import sys
-            extension=(Path(sys.executable).parent if getattr(sys,'frozen',False) else Path(__file__).parent)/'browser-extension'
+            extension=(Path(getattr(sys,'_MEIPASS',Path(__file__).parent)) if sys.platform=='darwin' else Path(sys.executable).parent if getattr(sys,'frozen',False) else Path(__file__).parent)/'browser-extension'
             page=('''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta name="paperquick-handoff" content="1"><title>文献直达 · 连接 ChatGPT</title>
 <style>body{max-width:760px;margin:55px auto;padding:0 24px;color:#19314b;font:16px/1.7 system-ui;background:#f5f8fc}section{padding:22px;background:white;border:1px solid #d6e2ef;border-radius:12px;margin:18px 0}code{overflow-wrap:anywhere}textarea{box-sizing:border-box;width:100%;min-height:140px;padding:12px}a{color:#1767c5}</style>

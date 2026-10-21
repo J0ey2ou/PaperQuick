@@ -653,6 +653,7 @@ class ReaderPage(ReaderWorkflow):
     def close(self):
         if not self.can_close():return False
         if getattr(self,'ai_panel',None):self.ai_panel.stop();self.ai_panel.closed=True
+        if getattr(getattr(self,'ai_panel',None),'embedded',None):self.ai_panel.embedded.close()
         self.save_notes();self.closed=True;self.generation+=1
         if getattr(self,'_chat_bridge',None):self._chat_bridge.close();self._chat_bridge=None
         for window in (self.attachment_manager,self.conversion_window,getattr(self,'word_citations',None)):

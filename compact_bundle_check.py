@@ -85,6 +85,11 @@ def run(root,report):
             from document_links import destination
             from tag_ui import tag_picker
             assert callable(export_pdf) and callable(destination) and callable(tag_picker)
+            from doi_identity import extract_document_doi
+            assert extract_document_doi('','doi:10.1136/bmjopen-2012-\n002007')=='10.1136/bmjopen-2012-002007'
+            assert callable(library_window.library.recover_import_identity)
+            assert callable(instance.reader_page.document_canvas.control_wheel)
+            assert callable(ChatBridge.require_document_upload)
             from pypdf import PdfWriter
             from pypdf.generic import DecodedStreamObject,NameObject
             writer=PdfWriter()

@@ -155,7 +155,7 @@
     const item=node.closest('[data-upload-state], [data-testid*="attachment"], [data-testid*="file"]')||node.parentElement||node;
     const state=item.getAttribute('data-upload-state')||'';
     if(state==='error'||/upload failed|couldn.t upload|上传失败|无法上传|上传出错/i.test(item.textContent))return 'error';
-    if(state==='uploading'||item.querySelector?.('[role="progressbar"], [aria-busy="true"]'))return 'uploading';
+    if(['uploading','processing','pending','queued','loading'].includes(state)||item.querySelector?.('[role="progressbar"], [aria-busy="true"], [data-state="loading"], .animate-spin')||/uploading|processing|正在上传|正在处理|上传中|处理中/i.test(item.textContent))return 'uploading';
     return 'ready';
   }
   const attachmentPresent=(editor,name)=>['ready','uploading'].includes(attachmentState(editor,name));
@@ -179,40 +179,63 @@
   }
 
   async function attach(editor, payload, request) {
-    const missing = payload.files.map((file, index) => ({...file, index})).filter(file => !attachmentPresent(editor, file.name));
-    if (!missing.length) return;
-    let input;
-    try { input = await fileInput(editor); } catch (_) { /* Use the web composer's drop handler below. */ }
-    for (const file of missing) {
+    const stateOf=name=>attachmentState(composer()||editor,name);
+    const waitComplete=async file=>{
+      await waitFor(()=>{
+        const state=stateOf(file.name);
+        if(state==='error')throw new Error('ChatGPT 未能上传“'+file.name+'”。请检查网络与附件额度，移除失败附件后重试；选中文字会保留。');
+        return state==='ready';
+      },120000);
+    };
+    for (const [index,file] of payload.files.entries()) {
+      const existing=stateOf(file.name);
+      if(existing==='ready')continue;
+      if(existing==='uploading'){await waitComplete(file);continue;}
+      if(existing==='error')throw new Error('“'+file.name+'”的上次上传失败。请在 ChatGPT 移除失败附件后再点重试。');
       const chunks = [];
       for (let part = 0; part < file.chunks; part++) {
-        const {data} = await rpc('Chunk', {descriptor: request, index: file.index, part});
+        let response;
+        for(let attempt=0;attempt<3;attempt++){
+          try{response=await rpc('Chunk',{descriptor:request,index,part});break;}
+          catch(error){if(attempt===2)throw error;await sleep(250*2**attempt);}
+        }
+        const {data} = response;
         chunks.push(Uint8Array.from(atob(data), ch => ch.charCodeAt(0)));
       }
+      if(chunks.reduce((total,chunk)=>total+chunk.byteLength,0)!==file.size)throw new Error('本地正文传输不完整，请保持软件运行后重试。');
       const types = {pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain', md: 'text/markdown', png: 'image/png'};
       const mime=types[file.name.split('.').pop().toLowerCase()]||'application/octet-stream';
+      try { await fileInput(composer()||editor); } catch (_) { /* Drop is the fallback; no OS file picker. */ }
+      let accepted=false;
+      for(let attempt=0;attempt<2&&!accepted;attempt++){
+      const live=await waitFor(composer);
       // Re-query after every attachment: the app may replace the input element.
       const inputs=[...document.querySelectorAll('input[type="file"]')];
-      input=inputs.find(node=>!node.accept||node.accept.split(',').some(rule=>{
+      const input=inputs.find(node=>!node.accept||node.accept.split(',').some(rule=>{
         rule=rule.trim().toLowerCase();return rule==='*/*'||rule===mime||file.name.toLowerCase().endsWith(rule)||
           (rule.endsWith('/*')&&mime.startsWith(rule.slice(0,-1)));
       }))||null;
       const transfer = new DataTransfer();
       transfer.items.add(new File(chunks, file.name, {type: types[file.name.split('.').pop().toLowerCase()] || 'application/octet-stream'}));
-      if (input?.isConnected) {
+      if (input?.isConnected && attempt===0) {
         input.value='';
         input.files = transfer.files;
         input.dispatchEvent(new Event('change', {bubbles: true}));
       } else {
-        editor.dispatchEvent(new DragEvent('dragenter', {bubbles: true, cancelable: true, dataTransfer: transfer}));
-        editor.dispatchEvent(new DragEvent('dragover', {bubbles: true, cancelable: true, dataTransfer: transfer}));
-        editor.dispatchEvent(new DragEvent('drop', {bubbles: true, cancelable: true, dataTransfer: transfer}));
+        live.dispatchEvent(new DragEvent('dragenter', {bubbles: true, cancelable: true, dataTransfer: transfer}));
+        live.dispatchEvent(new DragEvent('dragover', {bubbles: true, cancelable: true, dataTransfer: transfer}));
+        live.dispatchEvent(new DragEvent('drop', {bubbles: true, cancelable: true, dataTransfer: transfer}));
       }
-      await waitFor(()=>{
-        const state=attachmentState(editor,file.name);
-        if(state==='error')throw new Error('ChatGPT 未能上传“'+file.name+'”，选中文字已保留，可检查网络与附件额度后重试。');
-        return state==='ready';
-      },20000);
+      const until=Date.now()+3500;
+      while(Date.now()<until){
+        const state=stateOf(file.name);
+        if(state==='error')throw new Error('ChatGPT 未能上传“'+file.name+'”，选中文字已保留，请检查网络和附件额度。');
+        if(state){accepted=true;break;}
+        await sleep(150);
+      }
+      }
+      if(!accepted)throw new Error('网页尚未接收“'+file.name+'”。请等待附件菜单加载后重试；没有自动发送消息。');
+      await waitComplete(file);
     }
   }
 
@@ -283,7 +306,7 @@
         return {ok: false, error: error.message, reported: true};
       }
       if (composer() !== editor || !draftText(editor)) editor = await stageText(payload);
-      current.primaryAttached = payload.files.some(file => file.primary && attachmentPresent(editor, file.name));
+      current.primaryAttached = payload.files.some(file => file.primary && attachmentState(composer()||editor, file.name)==='ready');
       current.prepared = true;
       await report('ready');
       notice('已填入选区并准备附件，请核对上传状态后点击发送。');

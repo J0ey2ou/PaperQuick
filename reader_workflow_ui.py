@@ -34,6 +34,7 @@ class ReaderWorkflow:
         self.reading_menu.add_command(label='用 ChatGPT 讨论选框图片',command=self.chat_selected_image)
         self.reading_menu.add_command(label='框选图片供 ChatGPT 讨论',command=self.chat_image_tool)
         self.reading_menu.add_command(label='重新绑定这篇文献的 ChatGPT 对话',command=self.reset_chat)
+        self.reading_menu.add_command(label='重新上传正文到当前 ChatGPT 对话',command=self.reupload_chat_document)
         self.reading_menu.add_command(label='用 ChatGPT 通篇解读 / 修改模板',command=self.chat_full_paper)
         self.reading_menu.add_command(label='插入引用到笔记（自动页码）',command=self.insert_note_citation)
         self.reading_menu.add_command(label='插入 Word 引用（自动页码）',command=self.insert_word_citation)
@@ -235,6 +236,12 @@ class ReaderWorkflow:
         if not self.rid:return
         if messagebox.askyesno('重新绑定对话','下次讨论将新建对话并重新附上正文，原 ChatGPT 对话保留。继续？',parent=self.frame):
             self.chat_bridge().reset(self.rid);self.status.set('已解除绑定，下次右键讨论将创建新对话。')
+
+    def reupload_chat_document(self):
+        if not self.rid:return
+        self.chat_bridge().require_document_upload(self.rid)
+        item=self.current_selection() or {}
+        self.open_chat(quote=item.get('quote') or '请重新读取本次附上的文献正文，继续讨论这篇文章。',page=item.get('page',self.page))
 
     def toggle_continuous(self):
         lib=Library(self.directory)

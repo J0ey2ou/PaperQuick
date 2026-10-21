@@ -69,8 +69,9 @@ class LibraryWorkflow:
             try:
                 rid=self.import_document(path,project)
                 paper_ids.append(rid)
-                after=self._snapshot(rid);entries.append({'source':str(path),'id':rid,'before':before.get(rid),'after':after});before[rid]=after
-                details.append({'source':str(path),'state':'linked' if rid in existing_ids else 'imported','id':rid})
+                after=self._snapshot(rid);recovered=rid not in existing_ids and bool(json.loads(after['paper']['data']).get('identity_recovery'))
+                entries.append({'source':str(path),'id':rid,'before':before.get(rid),'after':after,'identity_recovery':recovered});before[rid]=after
+                details.append({'source':str(path),'state':'recovered' if recovered else 'linked' if rid in existing_ids else 'imported','id':rid})
             except Exception as exc:
                 errors.append(f'{Path(path).name}：{exc}')
                 details.append({'source':str(path),'state':'error','error':str(exc) or type(exc).__name__})
@@ -127,6 +128,7 @@ class LibraryWorkflow:
         # Repeated imports of the same paper are reversed in file order.
         for entry in reversed(entries):
             rid=entry['id'];current=self._snapshot(rid)
+            if entry.get('identity_recovery'):kept.add(rid);continue
             if rid in kept:continue
             if current is None:continue
             comparable=lambda x:{k:v for k,v in x.items() if k!='paper'}|{'tag_memberships':x.get('tag_memberships',[]),'paper':{k:v for k,v in x['paper'].items() if k!='updated'}}

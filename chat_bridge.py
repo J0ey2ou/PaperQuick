@@ -226,6 +226,15 @@ class ChatBridge:
             self.requests = {k: v for k, v in self.requests.items() if v['rid'] != rid}
             self.reply_sessions={k:v for k,v in self.reply_sessions.items() if v['rid']!=rid}
 
+    def require_document_upload(self,rid):
+        """Keep the existing conversation but prepare the main file again."""
+        lib=self._library()
+        try:
+            saved=lib.setting('chatgpt:'+rid,{})
+            if not isinstance(saved,dict):saved={}
+            saved.pop('fingerprint',None);lib.set_setting('chatgpt:'+rid,saved)
+        finally:lib.close()
+
     def reply(self,token,url,text,message_id=''):
         url=conversation_url(url)
         if not url or not isinstance(text,str) or not text.strip() or len(text)>100000:raise ValueError('回复内容或对话地址无效。')

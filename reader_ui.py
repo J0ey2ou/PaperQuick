@@ -644,6 +644,7 @@ class ReaderPage(ReaderWorkflow):
         self.status.set('转换已完成，新文件已保存。'+('已在右侧打开比对。' if attachment else ''))
 
     def scroll(self,event):
+        if self.document_canvas.control_wheel(event):return 'break'
         from ui_widgets import wheel_units
         units=wheel_units(self.canvas,event.delta)
         if units:self.canvas.yview_scroll(units,'units')

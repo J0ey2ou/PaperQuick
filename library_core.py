@@ -20,6 +20,8 @@ import xml.etree.ElementTree as ET
 from library_workflow import LibraryWorkflow
 from library_organization import LibraryOrganization, normalize_tags
 from naming_rules import optional_name
+from doi_identity import complete_doi,extract_document_doi
+from import_identity import ImportIdentity
 
 FIELDS = ('title', 'authors', 'year', 'doi', 'venue', 'abstract', 'keywords', 'notes', 'status')
 DEFAULT_TEMPLATE = '{年份}_{第一作者}_{标题}'
@@ -132,11 +134,11 @@ def document_metadata(path):
         title = path.stem
     body = re.split(r'(?im)^\s*(?:\d+[.)]?\s*)?(?:references|bibliography|literature cited|参考文献)\s*[:：]?\s*$', text, maxsplit=1)[0]
     # References may contain many DOIs; identity comes from the document's opening only.
-    doi = re.search(r'10\.\d{4,9}/[^\s<>"\u3000]+', body[:8000])
+    doi = extract_document_doi('',body[:8000])
     year = re.search(r'\b(?:19|20)\d{2}\b', body[:5000] + ' ' + props.get('created', ''))
     from references import parse_references
     return {'title': title, 'authors': props.get('creator', ''), 'year': year.group() if year else '',
-            'doi': normalize_doi(doi.group().rstrip('.,;)')) if doi else '', 'text': text,
+            'doi': doi, 'text': text,
             'references': parse_references(text)}
 
 def pdf_metadata(path):
@@ -180,13 +182,13 @@ def pdf_metadata(path):
         title = Path(path).stem
     body=re.split(r'(?im)^\s*(?:references|bibliography|参考文献)\s*$',text,maxsplit=1)[0]
     # Do not mistake a bibliography DOI for the identity of the imported paper.
-    doi = re.search(r'10\.\d{4,9}/[^\s<>"\u3000]+',str(meta.get('/doi') or meta.get('/DOI') or '')+' '+body[:8000])
+    doi = extract_document_doi(meta.get('/doi') or meta.get('/DOI') or '',body[:8000])
     year = re.search(r'\b(?:19|20)\d{2}\b', str(meta.get('/CreationDate', '')) + ' ' + text[:5000])
     from references import parse_references
     return {'title': title, 'authors': str(meta.get('/Author') or ''), 'year': year.group() if year else '',
-            'doi': normalize_doi(doi.group()) if doi else '', 'text': text,'references':parse_references(text)}
+            'doi': doi, 'text': text,'references':parse_references(text)}
 
-class Library(LibraryWorkflow, LibraryOrganization):
+class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -316,7 +318,7 @@ class Library(LibraryWorkflow, LibraryOrganization):
             data['rating'] = int(data['rating'])
         if 'doi' in data:
             data['doi'] = normalize_doi(data['doi'])
-        if not rid and deduplicate and data.get('doi'):
+        if not rid and deduplicate and complete_doi(data.get('doi')):
             row=self.db.execute("SELECT id FROM papers WHERE json_extract(data,'$.doi')=? LIMIT 1",(data['doi'],)).fetchone()
             rid=row[0] if row else None
         if getattr(self,'_import_observer',None):self._import_observer(rid)
@@ -548,6 +550,9 @@ class Library(LibraryWorkflow, LibraryOrganization):
         if old:
             if getattr(self,'_import_observer',None):self._import_observer(old['paper'])
             self._restore_attachment(dict(old), source)
+            recovered=self.recover_import_identity(dict(old),source)
+            if recovered:
+                self.assign(recovered,project);return recovered
             self.assign(old['paper'], project)
             return old['paper']
         metadata = pdf_metadata(source)
@@ -575,7 +580,7 @@ class Library(LibraryWorkflow, LibraryOrganization):
         return rid
 
     def _preserve_primary_text(self, metadata):
-        if metadata.get('doi'):
+        if complete_doi(metadata.get('doi')):
             row=self.db.execute("SELECT id FROM papers WHERE json_extract(data,'$.doi')=? LIMIT 1",(normalize_doi(metadata['doi']),)).fetchone()
             old=self.get(row[0]) if row else None
             if old and self.primary_attachment(old['id']):

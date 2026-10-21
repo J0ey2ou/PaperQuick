@@ -198,7 +198,7 @@ class AIHiddenUITests(unittest.TestCase):
         self.assertFalse(self.lib.get(self.rid)['notes'])
 
     def test_web_handoff_waits_for_user_and_returns_to_panel(self):
-        p=self.panel;p.provider.set('Gemini');p.scope.set('仅选文');p.select('总结要点')
+        p=self.panel;p.mode.set('网页账号');p.provider.set('Gemini');p.scope.set('仅选文');p.select('总结要点')
         with patch('webbrowser.open',return_value=True) as browser:
             p.send();self.wait(lambda:not p.active);browser.assert_called_once()
         bridge=self.reader.chat_bridge();token=next(reversed(bridge.requests))

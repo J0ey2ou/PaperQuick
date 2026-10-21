@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 import tkinter as tk
+import os
 from tkinter import ttk
 from pathlib import Path
 
@@ -94,12 +95,13 @@ class AIReadingPanel:
         from ui_widgets import scrollable_page, install_scrolling
         self.frame, form = scrollable_page(reader.notebook, padding=6);reader.notebook.add(self.frame, text='AI 阅读');install_scrolling(reader.frame)
         lib = Library(self.directory)
-        try:defaults = lib.setting('ai-default', {'provider':'chatgpt', 'mode':'网页账号'})
+        try:defaults = lib.setting('ai-default', {'provider':'chatgpt', 'mode':'内嵌网页' if os.name=='nt' else '网页账号'})
         finally:lib.close()
         self.names = {v['name']: k for k,v in PROVIDERS.items()}
         self.provider = tk.StringVar(value=PROVIDERS.get(defaults.get('provider'), PROVIDERS['chatgpt'])['name'])
         self.mode = tk.StringVar(value=defaults.get('mode', '网页账号'))
-        for variable, values in [(self.provider, list(self.names)), (self.mode, ['网页账号', 'API'])]:
+        modes=['内嵌网页','网页账号','API'] if os.name=='nt' else ['网页账号','API']
+        for variable, values in [(self.provider, list(self.names)), (self.mode, modes)]:
             combo = ttk.Combobox(form, textvariable=variable, values=values, state='readonly');combo.pack(fill='x', pady=3);combo.bind('<<ComboboxSelected>>', self.change_provider)
         top = ttk.Frame(form);top.pack(fill='x', pady=4)
         ttk.Button(top, text='AI 设置', command=self.settings).pack(side='left')
@@ -117,6 +119,8 @@ class AIReadingPanel:
         self.question = text_box(form, 3);self.set_template()
         controls = ttk.Frame(form);controls.pack(fill='x', pady=4)
         self.send_button = ttk.Button(controls, text='提问 / 打开网页', command=self.send, style='Accent.TButton');self.send_button.pack(side='left')
+        def button_label(*_):self.send_button.configure(text={'内嵌网页':'在此打开聊天','API':'发送提问','网页账号':'打开聊天网页'}.get(self.mode.get(),'提问'))
+        self.mode.trace_add('write',button_label);button_label()
         ttk.Button(controls, text='停止', command=self.stop).pack(side='right')
         self.status = tk.StringVar(value='网页由你确认发送；API 回答显示在下方。')
         ttk.Label(form, textvariable=self.status, wraplength=290, style='Muted.TLabel').pack(fill='x', pady=4)
@@ -153,6 +157,8 @@ class AIReadingPanel:
         self.refresh_history()
 
     def document_changed(self):
+        if getattr(self,'embedded',None) and getattr(self.embedded,'rid',None)!=self.reader.rid:
+            self.reader.notebook.hide(self.embedded.tab)
         self.bound_rid = self.reader.rid;self.selection = None;self.quote.delete('1.0', 'end');self.source.set('先在原文选中文字，再右键“询问 AI”。');self.refresh_history()
 
     def select(self, question=None):
@@ -206,7 +212,7 @@ class AIReadingPanel:
         if self.active:self.status.set('当前请求尚未结束，请稍候。');return
         if not r.rid or not getattr(self, 'selection', None):self.status.set('先在文献中选中文字，再右键询问 AI。');return
         provider = self.names[self.provider.get()];mode = self.mode.get();rid = r.rid
-        if mode == '网页账号' and not PROVIDERS[provider]['web']:self.status.set('自定义服务请使用 API 模式。');return
+        if mode != 'API' and not PROVIDERS[provider]['web']:self.status.set('自定义服务请使用 API 模式。');return
         anchor = copy.deepcopy(self.selection);quote = self.quote.get('1.0', 'end-1c');question = self.question.get('1.0', 'end-1c');scope = self.scope.get()
         if not question.strip():self.status.set('请填写问题。');return
         anchor['quote'] = quote;anchor['question'] = question;anchor['title'] = r.title.get()
@@ -224,7 +230,7 @@ class AIReadingPanel:
                 context = read_context(path, pages, scope == '整篇文本', cancel) if scope != '仅选文' else ''
                 prompt = context_prompt(title, quote, question, min(pages), context, scope)
                 if cancel.is_set():raise Cancelled('已停止。')
-                if mode == '网页账号':
+                if mode != 'API':
                     self.events.put((job_id, 'web', (prompt, anchor, provider, upload)));return
                 messages = [{'role':'system', 'content':SYSTEM}]
                 # Keep every prior turn or ask for a new conversation, never silently drop context.
@@ -262,13 +268,21 @@ class AIReadingPanel:
                 try:
                     bridge = self.reader.chat_bridge()
                     url = bridge.prepare(self.reader.rid, quote=prompt, page=anchor['page'], anchor=anchor, provider=provider, include_document=upload, attachment_id=anchor['attachment'], reply_mode='ai')
-                    import webbrowser
-                    if not webbrowser.open(bridge.open_url(url)):raise ValueError('浏览器未能打开。')
-                    self.status.set('已交给网页扩展准备。发送后，可在网页选中回答并回存到 AI 页签。')
+                    if active['mode']=='内嵌网页':
+                        if not getattr(self,'embedded',None):
+                            from embedded_chat import EmbeddedChat
+                            self.embedded=EmbeddedChat(self)
+                        self.embedded.open(url,provider)
+                        self.status.set('已在软件内打开聊天。回答回存后，可在 AI 页签加入笔记。')
+                    else:
+                        import webbrowser
+                        if not webbrowser.open(bridge.open_url(url)):raise ValueError('浏览器未能打开。')
+                        self.status.set('已交给网页扩展准备。发送后，可在网页选中回答并回存到 AI 页签。')
                 except (ValueError, OSError) as exc:self.status.set(str(exc))
             elif kind == 'done':self.refresh_history();self.status.set('回答已保存到本篇对话，可修改后加入笔记。')
             else:self.status.set(value);self.answer_turn = None
-        if self.mode.get() == '网页账号' and self.reader.rid and not self.active and time.monotonic()-self.last_inbox_check > 2:
+        if getattr(self,'embedded',None):self.embedded.poll()
+        if self.mode.get() != 'API' and self.reader.rid and not self.active and time.monotonic()-self.last_inbox_check > 2:
             self.last_inbox_check = time.monotonic()
             lib = Library(self.directory)
             try:turns = lib.setting('ai-web-replies:' + self.reader.rid + ':' + self.names[self.provider.get()], [])

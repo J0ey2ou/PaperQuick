@@ -16,6 +16,7 @@ if (-not (Test-Path -LiteralPath "$projectDir\word-integration\vendor\node.exe")
 }
 & "$projectDir\scripts\build_word_bridge.ps1"
 & "$projectDir\scripts\build_document_converter.ps1"
+& "$projectDir\scripts\build_embedded_chat.ps1"
 if (-not $SkipTests) {
     & $Python scripts/test_background.py
     if ($LASTEXITCODE -ne 0) { throw 'Background verification failed' }
@@ -23,6 +24,6 @@ if (-not $SkipTests) {
 $compilerPath=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 & $compilerPath /nologo /target:winexe "/out:$releaseDirectory\全局选词助手.exe" "/win32icon:$projectDir\browser-extension\app.ico" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll "$projectDir\selection-helper\SelectionAssistant.cs"
 if ($LASTEXITCODE -ne 0) { throw 'Selection helper build failed' }
-& $Python -m PyInstaller --noconfirm --clean --onefile --windowed --name PaperQuick --paths "$projectDir\build\vendor" --hidden-import pypdf --hidden-import pypdfium2 --collect-all pypdfium2 --collect-all pypdfium2_raw --add-data "$projectDir\graph_template.html;." --add-data "$projectDir\assets;assets" --add-data "$projectDir\word-integration;word-integration" --icon "$projectDir\assets\app.ico" --distpath "$releaseDirectory" --workpath "$projectDir\build\v$version" --specpath "$projectDir\build" "$projectDir\app.py"
+& $Python -m PyInstaller --noconfirm --clean --onefile --windowed --name PaperQuick --paths "$projectDir\build\vendor" --hidden-import pypdf --hidden-import pypdfium2 --collect-all pypdfium2 --collect-all pypdfium2_raw --add-data "$projectDir\graph_template.html;." --add-data "$projectDir\assets;assets" --add-data "$projectDir\word-integration;word-integration" --add-data "$projectDir\embedded-browser;embedded-browser" --add-data "$projectDir\browser-extension;browser-extension" --icon "$projectDir\assets\app.ico" --distpath "$releaseDirectory" --workpath "$projectDir\build\v$version" --specpath "$projectDir\build" "$projectDir\app.py"
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
 Write-Output "Build ready at $releaseDirectory. Running applications and installed files have not been changed."

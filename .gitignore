@@ -21,3 +21,4 @@ runtime/
 .updates/
 .venv/
 word-integration/*.pdb
+embedded-browser/*.dll

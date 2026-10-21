@@ -90,6 +90,10 @@ def run(root,report):
             assert callable(library_window.library.recover_import_identity)
             assert callable(instance.reader_page.document_canvas.control_wheel)
             assert callable(ChatBridge.require_document_upload)
+            native=Path(getattr(sys,'_MEIPASS',Path(__file__).parent))/'embedded-browser'
+            assert (native/'EmbeddedChat.exe').is_file() and (native/'WebView2Loader.dll').is_file()
+            assert (native.parent/'browser-extension/chat-content.js').is_file() and (native.parent/'browser-extension/ai-web-content.js').is_file()
+            assert all(instance.library_window.tree.heading(k,'command') for k in instance.library_window.tree['columns'])
             from ai_reading import context_prompt,protect_secret,load_profile,AIHistory
             from ai_providers import PROVIDERS,api_endpoint
             from ai_reading_ui import AISettings

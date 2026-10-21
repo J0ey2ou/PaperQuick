@@ -262,6 +262,8 @@ def install_theme(root):
     style.configure('ActiveNav.TButton', background=SURFACE, foreground=FG,
                     padding=(15, 12), borderwidth=0, font=(FONT, 11, 'bold'))
     style.map('ActiveNav.TButton', background=[('active', tokens['hover'])], foreground=[('!disabled', FG)])
+    from ui_controls import install_controls
+    install_controls(root,style,{key:globals()[key] for key in _CORE},tokens)
     root._paperquick_theme = CURRENT_SKIN
     _queue_window_chrome(root)
     return style

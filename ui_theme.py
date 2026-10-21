@@ -1,10 +1,12 @@
 """Shared, accessible palettes and typography for the desktop interface."""
 import tkinter as tk
 from tkinter import ttk
+import sys
 
 FONT = 'Microsoft YaHei UI'
 ENGLISH = 'Segoe UI Variable Text'
 DISPLAY = 'Segoe UI Variable Display'
+if sys.platform=='darwin':FONT='PingFang SC';ENGLISH='Helvetica Neue';DISPLAY='Helvetica Neue'
 _CORE = ('BG', 'PANEL', 'SURFACE', 'INPUT', 'FG', 'MUTED', 'ACCENT', 'LINE')
 BASE = dict(zip(_CORE, ('#101722', '#192331', '#243247', '#121d2b',
                         '#edf3fb', '#a5b4c8', '#99c5ff', '#35475f')))

@@ -1,6 +1,6 @@
 # 文献直达 · PaperQuick
 
-**v3.6.1**：修复换行 DOI 被截断造成不同文献误合并；能在确认两个正文具有不同完整 DOI 后恢复旧错误关联，保留笔记并记录恢复备份。增强 ChatGPT 附件上传的控件重建、慢上传、分块重试与完成校验；支持保留当前对话重新上传正文。正文与附件比对页支持 **Ctrl＋滚轮缩放**，保留缩放位置。设置内“检查更新”继续连接最新正式版。
+**v3.7.0**：新增阅读页 AI 助手，保留网页账号与 API 两种方式，支持 ChatGPT、豆包、DeepSeek、Gemini、千问 / Qwen、Kimi 及自定义兼容 API。选文右键提问、流式回答、同篇对话、回答及选中部分加入笔记并定位原文；设置支持模型、地址、加密密钥与连接测试。浏览器扩展升级至 2.6.0。详见 [AI 阅读助手](docs/ai-reading.md)。设置内自动更新入口继续有效。
 
 **v3.6.0**：ChatGPT 回复可一键回存原讨论页批注；支持跨 PDF 的具体位置链接与带批注 PDF 副本导出。重新调整书页主题、标题栏筛选、高 DPI 表头和滚动，新增已有标签选择、全库重命名与删除。修复阅读页导入后列表不刷新，增加逐文件导入结果和进度，并优化列表查询及搜索响应。[本版使用与升级说明](docs/v3.6-upgrade.md)。设置内“检查更新”持续连接最新正式版。
 
@@ -10,7 +10,7 @@
 
 从导师发来的一个标题，到课题文件夹里的一篇论文，再到阅读笔记和写作引用。Windows 本地文献工作区，连接 **查询 → 下载归档 → 分类与附件 → 阅读比对 → 关系探索 → 阅读回顾 → Word 写作**。
 
-[下载 v3.4 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.4.0/PaperQuick-v3.4-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.4.0) · [v3.4 升级指南](docs/v3.4-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
+[下载 v3.7.0 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.7.0/PaperQuick-v3.7.0-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.7.0) · [v3.7.0 升级指南](docs/v3.7.0-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
 
 **v3.2 新增**：Word 导入与分页预览、Word / PDF 互转、文献附件关联与并排比对、31 套 Word 引用格式，以及主题关键词、检索式、引用与被引探索和新文献追踪。
 

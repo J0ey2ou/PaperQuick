@@ -90,6 +90,14 @@ def run(root,report):
             assert callable(library_window.library.recover_import_identity)
             assert callable(instance.reader_page.document_canvas.control_wheel)
             assert callable(ChatBridge.require_document_upload)
+            from ai_reading import context_prompt,protect_secret,load_profile,AIHistory
+            from ai_providers import PROVIDERS,api_endpoint
+            from ai_reading_ui import AISettings
+            assert set(('chatgpt','doubao','deepseek','gemini','qwen','kimi'))<=set(PROVIDERS)
+            assert instance.reader_page.ai_panel.frame in [instance.reader_page.notebook.nametowidget(p) for p in instance.reader_page.notebook.tabs()]
+            assert '第 2 页' in context_prompt('Fixture','selected','Explain',1)
+            protected=protect_secret('frozen-fixture');assert protect_secret(protected,True)=='frozen-fixture'
+            assert api_endpoint(load_profile(folder/'本地文献库','deepseek')['endpoint']).endswith('/chat/completions')
             from pypdf import PdfWriter
             from pypdf.generic import DecodedStreamObject,NameObject
             writer=PdfWriter()

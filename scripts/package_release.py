@@ -21,7 +21,7 @@ def main():
         target=stage/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,target)
     (stage/'version.json').write_text(json.dumps({'version':VERSION,'package':'complete','prerelease':args.prerelease},indent=2),'utf-8')
     notes=(BASE/'RELEASE_NOTES.md').read_text('utf-8').split('\n# PaperQuick',1)[0]
-    upgrade=notes+'\n\n升级请保留原目录完整“本地文献库”、settings.json、shortcut.json。先从托盘正常退出主程序和选词助手，再覆盖程序文件。\n设置中可检查并下载后续版本；在退出后更新，下次启动生效。\n浏览器扩展文件更新后，请在扩展管理页重新加载，再刷新已有 ChatGPT 标签页。\n'
+    upgrade=notes+'\n\n升级请保留原目录完整“本地文献库”、settings.json、shortcut.json。先从托盘正常退出主程序和选词助手，再覆盖程序文件。\n设置中可检查并下载后续版本；在退出后更新，下次启动生效。\n浏览器扩展文件更新后，请在扩展管理页重新加载，再刷新已有 AI 网页标签页。\n'
     (stage/'升级说明.txt').write_text(upgrade,'utf-8-sig')
     manifest=write_manifest(stage,VERSION)
     destination=built/f'{prefix}-Windows.zip';partial=destination.with_suffix('.zip.partial')

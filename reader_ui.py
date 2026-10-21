@@ -168,6 +168,7 @@ class ReaderPage(ReaderWorkflow):
             self.annotations=record.get('annotations',[]);self._annotation_ids={a['id'] for a in self.annotations};self.original_annotations=[];self.last_selection=None;self.refresh_annotations()
             self.references=record.get('references',[]);self.note_status.set('笔记会自动保存')
         finally:lib.close()
+        if getattr(self,'ai_panel',None):self.ai_panel.document_changed()
         self.hide_comparison();self.canvas.delete('all');self.page_label.set('正在打开文档…')
         generation=self.generation;source=self.source_path;scale=self.scale;self.status.set('正在准备 Word 阅读预览…' if source.suffix.lower() in ('.doc','.docx') else '正在本地读取 PDF…')
         preview_done=threading.Event()
@@ -651,6 +652,7 @@ class ReaderPage(ReaderWorkflow):
         return 'break'
     def close(self):
         if not self.can_close():return False
+        if getattr(self,'ai_panel',None):self.ai_panel.stop();self.ai_panel.closed=True
         self.save_notes();self.closed=True;self.generation+=1
         if getattr(self,'_chat_bridge',None):self._chat_bridge.close();self._chat_bridge=None
         for window in (self.attachment_manager,self.conversion_window,getattr(self,'word_citations',None)):

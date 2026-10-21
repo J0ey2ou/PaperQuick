@@ -585,6 +585,8 @@ class App:
         finally:library.close()
         ttk.Separator(panel).pack(fill='x',pady=18)
         ttk.Label(panel,text='阅读与笔记',font=(FONT,12,'bold')).pack(anchor='w')
+        from ai_reading_ui import AISettings
+        ttk.Button(panel,text='AI 阅读助手：网页账号 / API 设置',command=lambda:AISettings(self.root,self.library_directory)).pack(anchor='w',pady=8)
         from chat_prompt_ui import ChatPromptDialog
         ttk.Button(panel,text='编辑 ChatGPT 通篇解读模板',command=lambda:ChatPromptDialog(self.root,self.library_directory)).pack(anchor='w',pady=8)
         ttk.Checkbutton(panel,text='连续阅读，向下滚动即可接着看下一页',variable=continuous).pack(anchor='w',pady=10)

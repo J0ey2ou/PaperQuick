@@ -1,4 +1,5 @@
 // Restricted, capability-based bridge. Never proxy arbitrary URLs or local paths.
+import './ai-sites.js';
 export function descriptor(value) {
   const match = /^(\d{1,5})\.([A-Za-z0-9_-]{43})$/.exec(value || '');
   if (!match || +match[1] < 1024 || +match[1] > 65535) throw new Error('无效的文献直达选区地址。');
@@ -8,9 +9,11 @@ export function descriptor(value) {
 export function chatRoute(value) {
   try {
     const url = new URL(value);
-    if (url.origin !== 'https://chatgpt.com') return '';
-    if (url.pathname === '/') return url.origin + '/';
-    if (/^\/c\/[a-zA-Z0-9-]{8,100}$/.test(url.pathname)) return url.origin + url.pathname;
+    if(url.username||url.password||url.port)return '';
+    for(const site of Object.values(globalThis.PaperQuickAISites)){
+      const home=new URL(site.home);
+      if(url.origin===home.origin&&(url.pathname===home.pathname||site.conversation.test(url.pathname)))return url.origin+url.pathname;
+    }
   } catch (_) { /* invalid URL */ }
   return '';
 }
@@ -47,7 +50,7 @@ async function route(message, sender) {
   if (saved?.tabId != null && saved.tabId !== tabId) {
     let previous;
     try { previous = await chrome.tabs.get(saved.tabId); } catch (_) { /* closed tab */ }
-    const expected = payload.url || 'https://chatgpt.com/';
+    const expected = payload.url || payload.home || 'https://chatgpt.com/';
     if (previous && chatRoute(previous.url) === expected) {
       const accepted = await chrome.tabs.sendMessage(previous.id, {type: 'paperQuickChatDeliver', descriptor: request});
       if (!accepted?.ok) throw new Error(accepted?.error || '原对话仍在处理选区，请完成后重试。');
@@ -57,7 +60,7 @@ async function route(message, sender) {
       return {ok: true, redirected: true};
     }
   }
-  const expected = payload.url || 'https://chatgpt.com/';
+  const expected = payload.url || payload.home || 'https://chatgpt.com/';
   if (await currentRoute(sender) !== expected) throw new Error('对话地址不匹配，请从文献阅读页重新打开。');
   await chrome.storage.session.set({[mapKey]: {tabId}, ['chat-pending:' + tabId]: {descriptor: request, route: expected}});
   return {ok: true, payload};
@@ -77,7 +80,7 @@ export function installChatBridge() {
       const pendingKey = 'chat-pending:' + sender.tab.id;
       if(launcher){
         const payload=await localRequest(message.descriptor);
-        const expected=payload.url||'https://chatgpt.com/';
+        const expected=payload.url||payload.home||'https://chatgpt.com/';
         if(!chatRoute(expected))throw new Error('文献对话地址无效。');
         await chrome.storage.session.set({[pendingKey]:{descriptor:message.descriptor,route:expected}});
         await localRequest(message.descriptor,'/status',{state:'extension-connected'});
@@ -101,7 +104,7 @@ export function installChatBridge() {
       }
       if (message.type === 'paperQuickChatPayload') {
         const payload = await localRequest(message.descriptor);
-        const expected = payload.url || 'https://chatgpt.com/';
+        const expected = payload.url || payload.home || 'https://chatgpt.com/';
         if (await currentRoute(sender) !== expected) throw new Error('当前页面已切换，请重新打开选区。');
         await chrome.storage.session.set({[pendingKey]: {descriptor: message.descriptor, route: expected}});
         return {ok: true, payload};
@@ -109,6 +112,8 @@ export function installChatBridge() {
       if (message.type === 'paperQuickChatChunk') {
         if (!Number.isSafeInteger(message.index) || message.index < 0 ||
             !Number.isSafeInteger(message.part) || message.part < 0) throw new Error('无效附件分块。');
+        const payload=await localRequest(message.descriptor);
+        if(await currentRoute(sender)!==(payload.url||payload.home||'https://chatgpt.com/'))throw new Error('当前页面与文献请求不匹配。');
         return {ok: true, ...await localRequest(message.descriptor, `/file/${message.index}/${message.part}`)};
       }
       if(message.type==='paperQuickChatStatus')return {ok:true,...await localRequest(message.descriptor,'/status',{state:message.state,detail:message.detail||''})};

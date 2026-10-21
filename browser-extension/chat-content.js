@@ -27,7 +27,7 @@
       if(!context.user||!(context.user.compareDocumentPosition(message)&Node.DOCUMENT_POSITION_FOLLOWING))continue;
       if(document.querySelector('[data-testid="stop-button"],button[aria-label="Stop streaming"]'))continue;
       const button=document.createElement('button');button.type='button';button.dataset.paperquickReply='1';
-      button.textContent='存为文献批注';button.title='保存到文献直达中本次讨论的原选区 / 页码';
+      button.textContent='回存到文献直达';button.title='保存到本次文献对应的 AI 回答或批注';
       button.style.cssText='display:block;margin:12px 0 4px;padding:7px 12px;border:1px solid #c9d8d0;border-radius:8px;background:#f3f7f4;color:#295c47;font:13px/1.5 system-ui;cursor:pointer';
       button.onclick=async()=>{
         button.disabled=true;button.textContent='正在回存…';
@@ -35,10 +35,12 @@
           if(route()!==context.url)throw new Error('对话已切换，请重新连接文献。');
           const body=message.querySelector('.markdown')||message;
           const clone=body.cloneNode(true);clone.querySelectorAll('button,[data-paperquick-reply]').forEach(item=>item.remove());
-          const text=(clone.innerText||clone.textContent||'').trim();
+          const selection=document.getSelection();
+          const selected=selection&&body.contains(selection.anchorNode)&&body.contains(selection.focusNode)?selection.toString().trim():'';
+          const text=selected||(clone.innerText||clone.textContent||'').trim();
           const messageId=message.getAttribute('data-message-id')||message.closest('[data-testid^="conversation-turn"]')?.getAttribute('data-testid')||'';
           await rpc('Reply',{descriptor:context.descriptor,text,messageId});
-          button.textContent='已保存到文献批注';
+          button.textContent='已回存到文献直达';
         }catch(error){button.disabled=false;button.textContent='重试回存批注';notice(error.message);}
       };
       message.append(button);

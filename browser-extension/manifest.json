@@ -1,16 +1,73 @@
 {
   "manifest_version": 3,
   "name": "文献直达 · 右键查原文",
-  "version": "2.5.1",
-  "description": "文献选区与正文接入 ChatGPT，复用同篇对话，并把选定的回复存回原页批注。",
-  "permissions": ["contextMenus", "activeTab", "scripting", "storage"],
-  "host_permissions": ["https://api.crossref.org/*", "https://www.ebi.ac.uk/*", "https://export.arxiv.org/*", "https://api.semanticscholar.org/*", "https://api.unpaywall.org/*", "https://chatgpt.com/*", "http://127.0.0.1/*"],
-  "content_scripts": [
-    {"matches": ["https://chatgpt.com/*"], "js": ["chat-content.js"], "run_at": "document_start"},
-    {"matches": ["http://127.0.0.1/*"], "js": ["chat-launch.js"], "run_at": "document_start"}
+  "version": "2.6.0",
+  "description": "阅读选文接入六家 AI 网页或软件 API；回复回存到文献笔记与批注。",
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "scripting",
+    "storage"
   ],
-  "background": {"service_worker": "background.js", "type": "module"},
-  "action": {"default_title": "查找当前页面中的论文"},
+  "host_permissions": [
+    "https://api.crossref.org/*",
+    "https://www.ebi.ac.uk/*",
+    "https://export.arxiv.org/*",
+    "https://api.semanticscholar.org/*",
+    "https://api.unpaywall.org/*",
+    "https://chatgpt.com/*",
+    "http://127.0.0.1/*",
+    "https://www.doubao.com/*",
+    "https://chat.deepseek.com/*",
+    "https://gemini.google.com/*",
+    "https://chat.qwen.ai/*",
+    "https://www.kimi.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "chat-content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "chat-launch.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.doubao.com/*",
+        "https://chat.deepseek.com/*",
+        "https://gemini.google.com/*",
+        "https://chat.qwen.ai/*",
+        "https://www.kimi.com/*"
+      ],
+      "js": [
+        "ai-sites.js",
+        "ai-web-content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "查找当前页面中的论文"
+  },
   "options_page": "results.html",
-  "icons": {"16": "icon16.png", "48": "icon48.png", "128": "icon128.png"}
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
 }

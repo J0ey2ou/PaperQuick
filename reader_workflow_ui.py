@@ -30,6 +30,12 @@ class ReaderWorkflow:
         self.document_canvas=DocumentCanvas(self);self.canvas.configure(yscrollcommand=self.document_canvas.scrolled)
         self.splitter.bind('<ButtonRelease-1>',lambda e:self.frame.after(120,self.fit_width))
         self.reading_menu.add_separator()
+        from ai_reading import TEMPLATES
+        from ai_reading_ui import AIReadingPanel
+        self.ai_panel=AIReadingPanel(self)
+        ai_menu=tk.Menu(self.reading_menu,tearoff=False)
+        for label in TEMPLATES:ai_menu.add_command(label=label,command=lambda v=label:self.ai_panel.select(v))
+        self.reading_menu.add_cascade(label='询问 AI（网页 / API）',menu=ai_menu)
         self.reading_menu.add_command(label='用 ChatGPT 讨论选中文字',command=self.chat_selected_text)
         self.reading_menu.add_command(label='用 ChatGPT 讨论选框图片',command=self.chat_selected_image)
         self.reading_menu.add_command(label='框选图片供 ChatGPT 讨论',command=self.chat_image_tool)

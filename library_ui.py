@@ -15,8 +15,9 @@ from graph_view import write_graph
 import endnote_sync
 from ui_theme import BG, PANEL, SURFACE, FG, MUTED, ACCENT, LINE, FONT, install_theme, emblem, style_dialog
 from ui_widgets import flow_bar
+from smart_views_ui import SmartViewsMixin
 
-class LibraryWindow:
+class LibraryWindow(SmartViewsMixin):
     def __init__(self, parent, directory, embedded=False):
         self.library = Library(directory)
         self.embedded=embedded
@@ -48,6 +49,7 @@ class LibraryWindow:
         for title,command in [('导入文档',self.import_pdfs),('导入文件夹',self.import_folder),('新增条目',self.new_record),('离线图谱',self.graph),('Word 引用',self.word)]:
             button=ttk.Button(toolbar,text=title,command=command,style='Accent.TButton' if title=='导入文档' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
         self.action_menu(toolbar,'文献库工具', [('导入记录',self.import_report),('撤回导入',self.undo_import),('命名规则',self.naming),('EndNote 同步',self.endnote)])
+        self.action_menu(toolbar,'智能视图', [('保存当前视图',self.save_smart_view),('打开已保存视图',self.smart_views),('显示列',self.choose_columns)])
         footer=ttk.Frame(self.win);footer.pack(side='bottom',fill='x')
         body=ttk.Panedwindow(self.win,orient='horizontal');body.pack(fill='both',expand=True,padx=24)
         left=ttk.Frame(body,width=210,padding=14,style='Card.TFrame');right=ttk.Frame(body,padding=(16,10),style='Card.TFrame');body.add(left,weight=0);body.add(right,weight=1)
@@ -109,6 +111,7 @@ class LibraryWindow:
         self.context_menu.add_command(label='打开已下载原文所在位置',command=self.open_document_location)
         self.context_menu.add_command(label='编辑标签',command=self.edit_tags)
         self.context_menu.add_command(label='打包当前课题…',command=self.package_topic)
+        self.context_menu.add_command(label='加入课题阅读队列',command=self.enqueue_selected)
         self.context_menu.add_command(label='ChatGPT 通篇解读 / 修改模板',command=self.chat_full_paper)
         states=tk.Menu(self.context_menu,tearoff=False);ratings=tk.Menu(self.context_menu,tearoff=False)
         for value in READING_STATES:states.add_command(label=value,command=lambda v=value:self.mark(v))
@@ -244,6 +247,9 @@ class LibraryWindow:
         from library_table import values
         rows={r['id']:values(r,projects) for r in self._records_cache}
         for r in self.table_state.ordered(self._records_cache,rows):
+            from workspace_state import WorkspaceStore
+            extras={k:v for k,v in getattr(self,'extra_view_criteria',{}).items() if k in ('download','year_from','year_to')}
+            if not WorkspaceStore.matches(r,rows[r['id']],extras):continue
             if not self.table_state.matches(rows[r['id']]):continue
             if scope is not None and not set(r['projects']) & scope:continue
             if query not in ' '.join(str(r.get(k,'')) for k in ('title','display_name','doi','authors','keywords','tags')).lower():continue
@@ -268,7 +274,7 @@ class LibraryWindow:
         self.table_state.sort(key);self.refresh_records()
 
     def clear_column_filters(self):
-        self.table_state.filters.clear();self.status_filter.set('全部状态');self.rating_filter.set('全部评分');self.tag_filter.set('全部标签');self.refresh_records()
+        self.extra_view_criteria={};self.search.set('');self.table_state.filters.clear();self.status_filter.set('全部状态');self.rating_filter.set('全部评分');self.tag_filter.set('全部标签');self.refresh_records()
 
     def column_choices(self,key):
         from library_table import values
@@ -283,7 +289,8 @@ class LibraryWindow:
 
     def column_click(self,event):
         if self.tree.identify_region(event.x,event.y)!='heading':return
-        index=int(self.tree.identify_column(event.x)[1:])-1;columns=list(self.tree['columns'])
+        index=int(self.tree.identify_column(event.x)[1:])-1;columns=list(self.tree['displaycolumns'])
+        if '#all' in columns:columns=list(self.tree['columns'])
         if not 0<=index<len(columns):return
         widths=[int(self.tree.column(c,'width')) for c in columns]
         edge=sum(widths[:index+1])-round(sum(widths)*self.tree.xview()[0])
@@ -311,20 +318,37 @@ class LibraryWindow:
         if self.busy:return
         self.busy=True;self.status.set(title+'…')
         for b in self.controls:b.configure(state='disabled')
-        def job():
+        def job(context=None):
             lib=None
             try:
-                lib=Library(self.library.root);result=work(lib);self.events.put(('ok',result,done))
-            except Exception as exc:self.events.put(('error',str(exc),None))
+                lib=Library(self.library.root);result=work(lib);self.events.put(('ok',result,done));return '文献库操作已完成'
+            except Exception as exc:
+                self.events.put(('error',str(exc),None))
+                if context is not None:raise
             finally:
                 if lib:lib.close()
-        threading.Thread(target=job,daemon=True).start()
+        if getattr(self,'task_manager',None):
+            try:self._managed_task_id=self.task_manager.submit('library-operation',title,job,metadata={'cancellable':False,'retryable':False})
+            except Exception as exc:
+                self.busy=False;self._managed_task_id=None
+                for button in self.controls:button.configure(state='normal')
+                self.status.set('任务未启动：'+str(exc));self.detail()
+        else:threading.Thread(target=job,daemon=True).start()
 
     def poll(self):
         try:
+            # A durable queue can fail before invoking our worker (for example
+            # when its state file becomes unwritable). Surface that terminal
+            # state here rather than leaving the library controls busy forever.
+            task_id=getattr(self,'_managed_task_id',None)
+            if self.busy and task_id and self.events.empty():
+                task=self.task_manager.get_task(task_id)
+                if task and task['status'] not in self.task_manager.ACTIVE:
+                    self.events.put(('error',task.get('error') or task.get('message') or '任务未执行，请重试。',None))
             while True:
                 kind,result,done=self.events.get_nowait();self.busy=False
                 if kind=='progress':self.busy=True;self.status.set(result);continue
+                self._managed_task_id=None
                 for b in self.controls:b.configure(state='normal')
                 self.refresh()
                 if kind=='error':

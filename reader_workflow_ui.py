@@ -379,14 +379,14 @@ class ReaderWorkflow:
         output=filedialog.asksaveasfilename(parent=self.frame,title='导出 PDF 副本（原文保留）',defaultextension='.pdf',filetypes=[('PDF','*.pdf')])
         if not output:return
         self.document_job=True;self.status.set('正在后台导出 PDF 批注副本…')
-        generation=self.generation;rid=self.rid;attachment=self.attachment_id
+        generation=self.generation;rid=self.rid;attachment=self.attachment_id;directory=self.directory;events=self.events
         def job():
             lib=None
             try:
                 from annotation_export import export_pdf
-                lib=Library(self.directory);result=export_pdf(lib,rid,attachment,output)
-                self.events.put(('pdf-exported',generation,result))
-            except Exception as exc:self.events.put(('document-error',generation,str(exc)))
+                lib=Library(directory);result=export_pdf(lib,rid,attachment,output)
+                events.put(('pdf-exported',generation,result))
+            except Exception as exc:events.put(('document-error',generation,str(exc)))
             finally:
                 if lib:lib.close()
         threading.Thread(target=job,daemon=True).start()
@@ -575,26 +575,26 @@ class ReaderWorkflow:
         if not self.source_path or self.document_job:return
         suffix=self.source_path.suffix.lower()
         if suffix not in ('.doc','.docx','.txt','.md'):self.status.set('原文编辑支持 Word 与 TXT；PDF 可以选择文字、记笔记和批注。');return
-        self.document_job=True;self.status.set('正在打开可编辑原文…');generation=self.generation;source=self.source_path
+        self.document_job=True;self.status.set('正在打开可编辑原文…');generation=self.generation;source=self.source_path;events=self.events
         def job():
             try:
                 data={'text':read_text_file(source),'comments':[]} if suffix in ('.txt','.md') else word_content(source)
-                data['sha']=digest(source);self.events.put(('editable-document',generation,data))
-            except Exception as exc:self.events.put(('document-error',generation,str(exc)))
+                data['sha']=digest(source);events.put(('editable-document',generation,data))
+            except Exception as exc:events.put(('document-error',generation,str(exc)))
         threading.Thread(target=job,daemon=True).start()
 
     def save_document(self):
         if not self.word_editing or not self.editor_dirty or self.document_job:return 'break'
-        source=self.source_path;edited=self.text_view.get('1.0','end-1c');raw=self.editor_raw;sha=self.editor_sha;rid=self.rid;aid=self.attachment_id;generation=self.generation
+        source=self.source_path;edited=self.text_view.get('1.0','end-1c');raw=self.editor_raw;sha=self.editor_sha;rid=self.rid;aid=self.attachment_id;generation=self.generation;directory=self.directory;events=self.events
         if source.suffix.lower() in ('.doc','.docx'):edited=edited.replace('␇','\x07')
         self.document_job=True;self.text_view.configure(state='disabled');self.status.set('正在保存原文，保存后保留上一版本…')
         def job():
-            staged=self.directory/'staging'/('edited-'+uuid.uuid4().hex+source.suffix);staged.parent.mkdir(parents=True,exist_ok=True);lib=None
+            staged=directory/'staging'/('edited-'+uuid.uuid4().hex+source.suffix);staged.parent.mkdir(parents=True,exist_ok=True);lib=None
             try:
                 if source.suffix.lower() in ('.txt','.md'):staged.write_text(edited,encoding='utf-8')
                 else:edit_word_copy(source,raw,edited,staged)
-                lib=Library(self.directory);lib.replace_document(rid,aid,staged,sha);self.events.put(('document-saved',generation,None))
-            except Exception as exc:self.events.put(('document-error',generation,str(exc)))
+                lib=Library(directory);lib.replace_document(rid,aid,staged,sha);events.put(('document-saved',generation,None))
+            except Exception as exc:events.put(('document-error',generation,str(exc)))
             finally:
                 if lib:lib.close()
                 staged.unlink(missing_ok=True)

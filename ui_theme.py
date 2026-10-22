@@ -21,6 +21,14 @@ SKINS = {
     '极简浅色': dict(BASE, BG='#f4f6fa', PANEL='#ffffff', SURFACE='#e9eef6',
                    INPUT='#fcfdff', FG='#233249', MUTED='#58697f',
                    ACCENT='#245faa', LINE='#cbd5e3'),
+    '奶油暖砂': dict(BASE, BG='#f5efe5', PANEL='#fffaf2', SURFACE='#eae0d1',
+                   INPUT='#fffdf8', FG='#3d3329', MUTED='#71604d', ACCENT='#895329', LINE='#d4c6b4'),
+    '雾松绿': dict(BASE, BG='#edf2ed', PANEL='#f8fbf7', SURFACE='#dfe8de',
+                 INPUT='#fcfdfb', FG='#293c32', MUTED='#54695a', ACCENT='#37634c', LINE='#bdcfbf'),
+    '暮色玫瑰': dict(BASE, BG='#241d25', PANEL='#302631', SURFACE='#443547',
+                   INPUT='#291f2b', FG='#f6edf3', MUTED='#c5afbf', ACCENT='#edb8c9', LINE='#66516a'),
+    '夜读黑': dict(BASE, BG='#101113', PANEL='#1b1d20', SURFACE='#2c3035',
+                 INPUT='#151719', FG='#f3f5f7', MUTED='#b8c0ca', ACCENT='#c9d7e8', LINE='#505965'),
     '琉璃·冰川蓝': dict(BASE, BG='#f2f5f9', PANEL='#ffffff', SURFACE='#e7edf5',
                       INPUT='#fbfcfe', FG='#24364c', MUTED='#53677d', ACCENT='#2d6197', LINE='#d1dce8'),
     '琉璃·翡翠绿': dict(BASE, BG='#e5f5ee', PANEL='#f2fcf7', SURFACE='#cfe9dd',
@@ -35,6 +43,23 @@ SKINS = {
                       INPUT='#102f3a', FG='#eefcff', MUTED='#b1d1da', ACCENT='#9ce4ea', LINE='#50808c'),
 }
 GLASS_SKINS = tuple(name for name in SKINS if name.startswith('琉璃·'))
+SKIN_DESCRIPTIONS = {
+    '书页白': '温润纸白与墨绿，适合日常阅读和整理文献。',
+    '深空蓝': '沉静蓝黑底色，适合夜间查阅与专注写作。',
+    '极光紫': '柔和紫色点缀，为深色工作区增加层次。',
+    '石墨灰': '中性石墨与薄荷强调色，简洁清晰。',
+    '极简浅色': '清爽浅灰与经典蓝，适合明亮环境。',
+    '奶油暖砂': '奶油纸色与焦糖强调色，营造温暖的阅读空间。',
+    '雾松绿': '低饱和雾绿与松木绿，阅读界面柔和自然。',
+    '暮色玫瑰': '深梅底色与浅玫瑰点缀，适合安静的晚间阅读。',
+    '夜读黑': '近黑背景与清晰银蓝文字，突出内容与操作层次。',
+    '琉璃·冰川蓝': '冰川白蓝，清透整洁；窗口保持完全不透明。',
+    '琉璃·翡翠绿': '翡翠浅绿，明快舒展；窗口保持完全不透明。',
+    '琉璃·蔷薇粉': '蔷薇粉与莓色，温柔鲜明；窗口保持完全不透明。',
+    '琉璃·鸢尾紫': '鸢尾浅紫，轻盈雅致；窗口保持完全不透明。',
+    '琉璃·琥珀金': '琥珀暖金，柔和明亮；窗口保持完全不透明。',
+    '琉璃·深海青': '深海青与浅蓝，沉静通透；窗口保持完全不透明。',
+}
 CURRENT_SKIN = '书页白'
 globals().update(SKINS[CURRENT_SKIN])
 _LEGACY = dict(zip(_CORE, ('#080f1c', '#101c2e', '#15243a', '#0b1627',
@@ -207,9 +232,9 @@ def install_theme(root):
     style.map('Subtle.TButton', background=[('pressed', SURFACE), ('active', PANEL)],
               foreground=[('disabled', tokens['disabled']), ('active', FG), ('!disabled', MUTED)])
     style.configure('Compact.TButton', padding=(10, 6), font=(FONT, 9))
-    style.configure('Icon.TButton',padding=3,width=0,background=BG,borderwidth=0)
+    style.configure('Icon.TButton',padding=0,width=0,anchor='center',background=BG,borderwidth=0)
     style.map('Icon.TButton',background=[('pressed',tokens['pressed']),('active',tokens['hover'])])
-    style.configure('SelectedIcon.TButton',padding=3,width=0,background=tokens['selection'],borderwidth=0)
+    style.configure('SelectedIcon.TButton',padding=0,width=0,anchor='center',background=tokens['selection'],borderwidth=0)
     style.map('SelectedIcon.TButton',background=[('pressed',tokens['pressed']),('active',tokens['hover']),('!disabled',tokens['selection'])])
     style.configure('Toolbar.TEntry',padding=3)
     style.configure('TEntry', fieldbackground=INPUT, foreground=FG, insertcolor=ACCENT,
@@ -223,6 +248,11 @@ def install_theme(root):
               foreground=[('disabled', MUTED), ('readonly', FG)],
               selectbackground=[('readonly', INPUT)], selectforeground=[('readonly', FG)],
               bordercolor=[('focus', ACCENT)], background=[('active', tokens['hover'])])
+    style.configure('TSpinbox',fieldbackground=INPUT,background=INPUT,foreground=FG,
+                    insertcolor=ACCENT,arrowcolor=MUTED,padding=(10,7),borderwidth=0,
+                    selectbackground=tokens['selection'],selectforeground=FG)
+    style.map('TSpinbox',foreground=[('disabled',MUTED)],
+              fieldbackground=[('disabled',SURFACE)],arrowcolor=[('disabled',tokens['disabled'])])
     for option, value in {'background': PANEL, 'foreground': FG,
                           'selectBackground': tokens['selection'], 'selectForeground': FG}.items():
         root.option_add('*TCombobox*Listbox.' + option, value)

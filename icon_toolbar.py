@@ -40,6 +40,13 @@ def icon_image(name, color, size=20):
     elif name=='bold':line([(6,3),(6,17),(12,17),(15,14),(13,10),(6,10)]);line([(6,3),(12,3),(14,6),(12,10)])
     elif name=='italic':line([(9,3),(16,3)]);line([(4,17),(11,17)]);line([(13,3),(7,17)])
     else:box((4,2,16,18));line([(7,7),(13,7)]);line([(7,11),(13,11)])
+    # Center the visible strokes, including asymmetric glyphs such as the
+    # pointer and comment bubble, before reducing the supersampled artwork.
+    bounds = image.getbbox()
+    if bounds:
+        glyph = image.crop(bounds)
+        image = Image.new('RGBA', image.size)
+        image.paste(glyph, ((image.width-glyph.width)//2, (image.height-glyph.height)//2))
     return image.resize((size,size), Image.Resampling.LANCZOS)
 
 
@@ -72,8 +79,11 @@ class HoverHelp:
 
 class IconToolbar(ttk.Frame):
     def __init__(self,parent,**kwargs):
-        super().__init__(parent,height=40,**kwargs)
-        self.items=[];self.hidden=[];self.cell=32;self._theme_key=None
+        self.scale=max(1.,float(parent.tk.call('tk','scaling'))/(96/72))
+        self.toolbar_height=round(40*self.scale)
+        super().__init__(parent,height=self.toolbar_height,**kwargs)
+        self.items=[];self.hidden=[];self.cell=round(38*self.scale);self.button_size=round(34*self.scale);self._theme_key=None
+        self.icon_size=round(20*self.scale)
         self.pack_propagate(False)
         self.menu=tk.Menu(self,tearoff=False)
         self.more=ttk.Button(self,command=self.show_more,style='Icon.TButton',takefocus=True)
@@ -102,32 +112,40 @@ class IconToolbar(ttk.Frame):
         key=(theme.CURRENT_SKIN,theme.FG,theme.ACCENT)
         if not force and self._theme_key==key:return
         self._theme_key=key
+        disabled=theme._tokens(theme.SKINS[theme.CURRENT_SKIN])['disabled']
         for item in self.items:
             selected=self.selected(item);widget=item['widget']
             color=item['color']() if item['color'] else theme.FG
-            widget.photo=ImageTk.PhotoImage(icon_image(item['icon'],color),master=self)
-            widget.configure(image=widget.photo,style='SelectedIcon.TButton' if selected else 'Icon.TButton')
-        self.more.photo=ImageTk.PhotoImage(icon_image('more',theme.FG),master=self)
+            widget.photo=ImageTk.PhotoImage(icon_image(item['icon'],color,self.icon_size),master=self)
+            widget.disabled_photo=ImageTk.PhotoImage(icon_image(item['icon'],disabled,self.icon_size),master=self)
+            widget.configure(image=(widget.photo,'disabled',widget.disabled_photo),style='SelectedIcon.TButton' if selected else 'Icon.TButton')
+        self.more.photo=ImageTk.PhotoImage(icon_image('more',theme.FG,self.icon_size),master=self)
         self.more.configure(image=self.more.photo)
         self.arrange()
     def arrange(self,width=None):
-        width=width or self.winfo_width()
-        has_page=hasattr(self,'page_entry');reserved=155 if has_page and width>=450 else 45 if has_page else 0
+        width=max(1,width if width is not None else self.winfo_width())
+        entry_width=round(40*self.scale);gap=round(6*self.scale)
+        has_page=hasattr(self,'page_entry')
+        show_page=has_page and width>=self.cell+entry_width+gap
+        reserved=round(155*self.scale) if show_page and width>=round(450*self.scale) else entry_width+gap if show_page else 0
+        y=(self.toolbar_height-self.button_size)//2
         capacity=max(0,(width-reserved)//self.cell)
         visible=len(self.items) if capacity>=len(self.items) else max(0,capacity-1)
         for i,item in enumerate(self.items):
-            if i<visible:item['widget'].place(x=i*self.cell,y=3,width=self.cell-2,height=32)
+            if i<visible:item['widget'].place(x=i*self.cell,y=y,width=self.button_size,height=self.button_size)
             else:item['widget'].place_forget()
         self.hidden=self.items[visible:]
-        if self.hidden:self.more.place(x=visible*self.cell,y=3,width=30,height=32)
+        if self.hidden:self.more.place(x=visible*self.cell,y=y,width=min(self.button_size,width),height=self.button_size)
         else:self.more.place_forget()
-        if has_page:
-            self.page_entry.place(x=max(0,width-reserved),y=6,width=40,height=27)
-            if reserved>45:self.page_status.place(x=width-reserved+46,y=7,width=reserved-46,height=25)
+        if show_page:
+            self.page_entry.place(x=width-reserved,y=y,width=entry_width,height=self.button_size)
+            if reserved>entry_width+gap:self.page_status.place(x=width-reserved+entry_width+gap,y=y,width=reserved-entry_width-gap,height=self.button_size)
             else:self.page_status.place_forget()
+        elif has_page:
+            self.page_entry.place_forget();self.page_status.place_forget()
     def show_more(self):
         self.menu.delete(0,'end')
         for item in self.hidden:
             self.menu.add_command(label=('✓ ' if self.selected(item) else '')+item['label'],command=item['command'])
-        try:self.menu.tk_popup(self.more.winfo_rootx(),self.more.winfo_rooty()+32)
+        try:self.menu.tk_popup(self.more.winfo_rootx(),self.more.winfo_rooty()+self.more.winfo_height())
         finally:self.menu.grab_release()

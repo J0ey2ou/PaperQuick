@@ -77,6 +77,8 @@ class ThemeTests(unittest.TestCase):
                     self.assertEqual(entry.get(), '主题输入框')
                     self.assertEqual(combo.get(), '示例课题')
                     self.assertEqual(spin.get(), '7')
+                    self.assertEqual(ttk.Style(root).lookup('TSpinbox','fieldbackground'),theme.INPUT)
+                    self.assertEqual(ttk.Style(root).lookup('TSpinbox','foreground'),theme.FG)
                     self.assertEqual(plain.cget('selectforeground'), theme.FG)
             finally:
                 root.destroy()

@@ -27,7 +27,13 @@ def run(root,report):
             instance.show_page('reader');root.update_idletasks()
             labels={item['label'] for item in instance.reader_page.toolbar.items}
             assert {'截图到笔记','框选图片供 ChatGPT 讨论','保存笔记','嵌入参考文献'}<=labels
-            assert instance.reader_page.toolbar.winfo_reqheight()==40
+            toolbar=instance.reader_page.toolbar
+            assert toolbar.winfo_reqheight()>=40
+            for skin in ('奶油暖砂','雾松绿','暮色玫瑰','夜读黑'):
+                instance.settings_vars['skin'].set(skin);root.update_idletasks()
+                assert instance.skin==skin and toolbar._theme_key[0]==skin
+                assert toolbar.items[0]['widget'].winfo_reqheight()<=toolbar.button_size
+            instance.settings_vars['skin'].set('极简浅色');instance.flush_settings()
             preview=AttachmentPreview(instance.reader_page.frame,folder/'本地文献库',lambda:None)
             assert len(preview.toolbar.items)==7;preview.close()
             assert load_preferences(folder/'settings.json')['skin']=='极简浅色'

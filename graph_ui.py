@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk,messagebox,colorchooser,simpledialog
 from library_core import Library
 from graph_view import write_graph
-from ui_theme import BG,PANEL,SURFACE,FG,MUTED,ACCENT,LINE,FONT,style_dialog
+from ui_theme import BG,PANEL,SURFACE,INPUT,FG,MUTED,ACCENT,LINE,FONT,style_dialog
 from graph_style import DEFAULT,validate_style,score,appearance
 from graph_layout import subset,force_layout
 
@@ -75,7 +75,7 @@ class GraphPage:
         ttk.Button(side,text='查找选中文献原文',command=self.query_selected).pack(fill='x',pady=(0,8))
         ttk.Button(side,text='将候选文献收藏到课题',command=self.collect_selected).pack(fill='x',pady=(0,8))
         ttk.Button(side,text='重置视图',command=self.reset).pack(fill='x')
-        self.canvas=tk.Canvas(content,bg='#0b1627',highlightbackground=LINE,highlightthickness=1)
+        self.canvas=tk.Canvas(content,bg=INPUT,highlightbackground=LINE,highlightthickness=1)
         self.canvas.pack(side='left',fill='both',expand=True)
         self.canvas.bind('<Configure>',lambda _:self.draw());self.canvas.bind('<Button-1>',self.select);self.canvas.bind('<B1-Motion>',self.move);self.canvas.bind('<ButtonRelease-1>',self.release);self.canvas.bind('<MouseWheel>',self.wheel)
         self.canvas.bind('<Double-1>',self.double_click)
@@ -165,7 +165,7 @@ class GraphPage:
             projects=sorted({p for n in nodes for p in n['projects']});self.canvas.create_text(26,28,text='课题收藏分布',anchor='w',fill=FG,font=(FONT,15,'bold'))
             for i,p in enumerate(projects[:max(1,(height-85)//56)]):
                 y=82+i*56;count=sum(p in n['projects'] for n in nodes);self.canvas.create_text(26,y,text=p[:20],anchor='w',fill=FG,font=(FONT,11))
-                start=min(240,width*.4);end=width-85;self.canvas.create_rectangle(start,y-12,end,y+12,fill='#1c3047',outline='',tags=('project',p));self.canvas.create_rectangle(start,y-12,start+(end-start)*count/max(1,len(nodes)),y+12,fill=ACCENT,outline='',tags=('project',p));self.canvas.create_text(width-35,y,text=str(count),fill=FG,font=('Segoe UI Variable Text',12),tags=('project',p))
+                start=min(240,width*.4);end=width-85;self.canvas.create_rectangle(start,y-12,end,y+12,fill=SURFACE,outline='',tags=('project',p));self.canvas.create_rectangle(start,y-12,start+(end-start)*count/max(1,len(nodes)),y+12,fill=ACCENT,outline='',tags=('project',p));self.canvas.create_text(width-35,y,text=str(count),fill=FG,font=('Segoe UI Variable Text',12),tags=('project',p))
             return
         total=len(nodes);self.limit_slider.configure(to=max(1,total))
         if self.focus not in ids:self.focus=None
@@ -208,7 +208,7 @@ class GraphPage:
             if n['id'] in getattr(self,'selection_ids',set()):self.canvas.create_oval(x-12,y-12,x+12,y+12,outline='#b49ae5',width=3)
             if n.get('kind')=='note':self.canvas.create_rectangle(x-7,y-7,x+7,y+7,fill='#e5a15a',outline='',tags=tags)
             elif n.get('kind')=='attachment':self.canvas.create_rectangle(x-7,y-7,x+7,y+7,fill='#b49ae5',outline='',tags=tags)
-            else:self.canvas.create_oval(x-r,y-r,x+r,y+r,fill=color if n.get('in_library',True) else '#0b1627',outline='' if n.get('in_library',True) else color,width=1.5,tags=tags)
+            else:self.canvas.create_oval(x-r,y-r,x+r,y+r,fill=color if n.get('in_library',True) else self.canvas.cget('background'),outline='' if n.get('in_library',True) else color,width=1.5,tags=tags)
             if len(nodes)<22 or (self.selected and n['id'] in neighbors) or (self.zoom>1.7 and len(nodes)<90):
                 label=self.canvas.create_text(x+13 if x<width-230 else x-13,y,text=n['title'][:34],anchor='w' if x<width-230 else 'e',fill=FG if n['id']==self.selected else MUTED,font=(FONT,9),tags=tags)
                 box=self.canvas.bbox(label)

@@ -13,6 +13,13 @@ def main():
     report=json.loads(args.bundle_check.read_text('utf-8'))
     assert report['passed'] and report['frozen'] and report['version']==VERSION
     files={p.relative_to(BASE).as_posix():p for p in application_files()}
+    extension=json.loads((BASE/'browser-extension/manifest.json').read_text('utf-8'))
+    required={path for script in extension.get('content_scripts',[]) for path in script.get('js',[])+script.get('css',[])}
+    required.update(extension.get('icons',{}).values())
+    if extension.get('background',{}).get('service_worker'):required.add(extension['background']['service_worker'])
+    for entry in extension.get('web_accessible_resources',[]):
+        required.update(path for path in entry.get('resources',[]) if '*' not in path)
+    assert all('browser-extension/'+path in files for path in required),'Extension manifest references a missing public file'
     files['文献直达.exe']=built/'PaperQuick.exe'
     files['全局选词助手.exe']=built/'全局选词助手.exe' if (built/'全局选词助手.exe').is_file() else BASE/'全局选词助手.exe'
     assert all(p.is_file() for p in files.values())

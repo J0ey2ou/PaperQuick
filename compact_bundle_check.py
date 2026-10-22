@@ -88,6 +88,30 @@ def run(root,report):
             from doi_identity import extract_document_doi
             assert extract_document_doi('','doi:10.1136/bmjopen-2012-\n002007')=='10.1136/bmjopen-2012-002007'
             assert callable(library_window.library.recover_import_identity)
+            # Exercise the dialog and background exporter inside the frozen EXE.
+            import tkinter as tk
+            import zipfile
+            original_top=tk.Toplevel
+            def hidden_top(*args,**kwargs):
+                window=original_top(*args,**kwargs);window.withdraw();return window
+            with patch('topic_package_ui.tk.Toplevel',side_effect=hidden_top):
+                library_window.package_topic()
+            package=library_window.package_window
+            assert not package.win.winfo_ismapped() and imported['id'] in package.selection
+            export_dir=folder/'exports';export_dir.mkdir()
+            package.directory.set(str(export_dir));package.name.set('Frozen topic fixture')
+            for format in ('zip','folder'):
+                package.format.set(format);package.start()
+                deadline=time.monotonic()+12
+                while package.busy and time.monotonic()<deadline:root.update();time.sleep(.02)
+                assert not package.busy and package.result,package.status.get()
+                assert package.result['files']>=1
+                if format=='zip':
+                    with zipfile.ZipFile(package.result['path']) as archive:
+                        assert archive.testzip() is None
+                        assert any(name.endswith('/打包清单.json') for name in archive.namelist())
+                else:assert (package.result['path']/'文献目录.csv').is_file()
+            package.close()
             assert callable(instance.reader_page.document_canvas.control_wheel)
             assert callable(ChatBridge.require_document_upload)
             native=Path(getattr(sys,'_MEIPASS',Path(__file__).parent))/'embedded-browser'
@@ -123,5 +147,5 @@ def run(root,report):
             assert converter_path().is_file() and bridge_path().is_file()
             instance.close()
     report.write_text(json.dumps({'passed':True,'version':VERSION,'project':PROJECT_URL,'frozen':bool(getattr(sys,'frozen',False)),
-        'checks':['single-row reader and comparison','toolbar icons bundled','automatic settings persistence','existing library and unknown preferences retained','Word helpers present','ChatGPT bridge bundled without browser launch','cross-page document crop contains both pages','tags and nested projects','ratings persisted','whole-paper prompt template','Word CSL citation and automatic bibliography plan','settings updater bundled'],
+        'checks':['single-row reader and comparison','toolbar icons bundled','automatic settings persistence','existing library and unknown preferences retained','Word helpers present','ChatGPT bridge bundled without browser launch','cross-page document crop contains both pages','tags and nested projects','ratings persisted','whole-paper prompt template','Word CSL citation and automatic bibliography plan','settings updater bundled','topic package hidden dialog and ZIP/folder workers'],
         'background_only':True},ensure_ascii=False,indent=2),'utf-8')

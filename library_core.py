@@ -318,27 +318,31 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
             data['rating'] = int(data['rating'])
         if 'doi' in data:
             data['doi'] = normalize_doi(data['doi'])
-        if not rid and deduplicate and complete_doi(data.get('doi')):
-            row=self.db.execute("SELECT id FROM papers WHERE json_extract(data,'$.doi')=? LIMIT 1",(data['doi'],)).fetchone()
-            rid=row[0] if row else None
-        if getattr(self,'_import_observer',None):self._import_observer(rid)
-        if rid:
-            old = self.get(rid)
-            merged = {k: v for k, v in old.items() if k not in ('id', 'projects', 'attachments', 'primary_project')}
-            merged.update(data)
-            data = merged
-            additional_project = project
-            project = old['primary_project']
-        else:
-            rid = uuid.uuid4().hex
-        project = project or self.projects()[0]['id']
-        self.project(project)
-        for field in FIELDS:
-            data.setdefault(field, '未读' if field == 'status' else '')
+        # Acquire the writer lock before read/merge. Notes, reading state and
+        # metadata may be saved by separate connections at the same time.
         with self.db:
+            if not self.db.in_transaction:self.db.execute('BEGIN IMMEDIATE')
+            if not rid and deduplicate and complete_doi(data.get('doi')):
+                row=self.db.execute("SELECT id FROM papers WHERE json_extract(data,'$.doi')=? LIMIT 1",(data['doi'],)).fetchone()
+                rid=row[0] if row else None
+            if getattr(self,'_import_observer',None):self._import_observer(rid)
+            additional_project = None
+            if rid:
+                old = self.get(rid)
+                merged = {k: v for k, v in old.items() if k not in ('id', 'projects', 'attachments', 'primary_project')}
+                merged.update(data)
+                data = merged
+                additional_project = project
+                project = old['primary_project']
+            else:
+                rid = uuid.uuid4().hex
+            project = project or self.projects()[0]['id']
+            self.project(project)
+            for field in FIELDS:
+                data.setdefault(field, '未读' if field == 'status' else '')
             self.db.execute('INSERT OR REPLACE INTO papers VALUES(?,?,?,?)', (rid, json.dumps(data, ensure_ascii=False), project, time.time()))
             self.db.execute('INSERT OR IGNORE INTO memberships VALUES(?,?)', (rid, project))
-            if rid and 'additional_project' in locals() and additional_project:
+            if additional_project:
                 self.project(additional_project)
                 self.db.execute('INSERT OR IGNORE INTO memberships VALUES(?,?)', (rid, additional_project))
                 self.db.execute('DELETE FROM tag_memberships WHERE paper=? AND project=?',(rid,additional_project))

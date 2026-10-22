@@ -25,7 +25,7 @@ class LibraryWindow:
             self.win.title('文献直达 · 本地文献库')
             self.win.geometry('1320x920'); self.win.minsize(1120,800)
         install_theme(self.win.winfo_toplevel())
-        self.events = queue.Queue(); self.busy = False; self.current_project = None;self.word_citations=None;self.attachment_window=None;self.conversion_window=None
+        self.events = queue.Queue(); self.busy = False; self.current_project = None;self.word_citations=None;self.attachment_window=None;self.conversion_window=None;self.package_window=None
         self.status = tk.StringVar(value='本地整理与图谱完全离线 · 导入 PDF 保留原文件')
         self.search = tk.StringVar()
         header=ttk.Frame(self.win,padding=(24,12 if embedded else 22,24,10)); header.pack(fill='x')
@@ -45,33 +45,39 @@ class LibraryWindow:
             tk.Label(card,text=label,bg=PANEL,fg=MUTED,font=(FONT,10),anchor='w').pack(side='left',padx=(0,12))
         toolbar=ttk.Frame(self.win,padding=(24,4,24,8));toolbar.pack(fill='x');flow_bar(toolbar)
         self.controls=[]
-        for title,command in [('导入文档',self.import_pdfs),('导入文件夹',self.import_folder),('导入记录',self.import_report),('撤回导入',self.undo_import),('新增条目',self.new_record),('命名规则',self.naming),('离线图谱',self.graph),('EndNote 同步',self.endnote),('Word 引用',self.word)]:
+        for title,command in [('导入文档',self.import_pdfs),('导入文件夹',self.import_folder),('新增条目',self.new_record),('离线图谱',self.graph),('Word 引用',self.word)]:
             button=ttk.Button(toolbar,text=title,command=command,style='Accent.TButton' if title=='导入文档' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
+        self.action_menu(toolbar,'文献库工具', [('导入记录',self.import_report),('撤回导入',self.undo_import),('命名规则',self.naming),('EndNote 同步',self.endnote)])
         footer=ttk.Frame(self.win);footer.pack(side='bottom',fill='x')
         body=ttk.Panedwindow(self.win,orient='horizontal');body.pack(fill='both',expand=True,padx=24)
         left=ttk.Frame(body,width=210,padding=14,style='Card.TFrame');right=ttk.Frame(body,padding=(16,10),style='Card.TFrame');body.add(left,weight=0);body.add(right,weight=1)
         ttk.Label(left,text='课题导航',font=(FONT,12,'bold'),style='Card.TLabel').pack(anchor='w',pady=(4,6))
         ttk.Label(left,text='RESEARCH PROJECTS',font=('Segoe UI',8,'bold'),style='CardMuted.TLabel').pack(anchor='w',pady=(0,16))
-        self.projects=tk.Listbox(left,exportselection=False,width=22,relief='flat',bg=PANEL,fg=FG,selectbackground='#1c485f',selectforeground=ACCENT,highlightthickness=0,activestyle='none',font=(FONT,11),borderwidth=0);self.projects.pack(fill='both',expand=True)
+        project_actions=ttk.Frame(left,style='Card.TFrame');project_actions.pack(side='bottom',fill='x',pady=(10,0))
+        project_button=ttk.Button(project_actions,text='+ 新建课题',command=self.new_project)
+        project_button.pack(fill='x',pady=(0,6));self.controls.append(project_button)
+        self.action_menu(project_actions,'课题与标签管理', [('+ 新建子课题',self.new_subproject),('标签管理',self.manage_tags),('标签自动归类规则',self.project_tag_rules)],fill=True)
+        project_list=ttk.Frame(left,style='Card.TFrame');project_list.pack(fill='both',expand=True)
+        self.projects=tk.Listbox(project_list,exportselection=False,width=22,relief='flat',bg=PANEL,fg=FG,selectbackground='#1c485f',selectforeground=ACCENT,highlightthickness=0,activestyle='none',font=(FONT,11),borderwidth=0);self.projects.pack(side='left',fill='both',expand=True)
+        project_scroll=ttk.Scrollbar(project_list,command=self.projects.yview);project_scroll.pack(side='right',fill='y');self.projects.configure(yscrollcommand=project_scroll.set)
         self.projects.bind('<<ListboxSelect>>',self.select_project)
-        project_button=ttk.Button(left,text='+ 新建课题',command=self.new_project)
-        project_button.pack(side='bottom',fill='x',pady=8,before=self.projects)
-        ttk.Button(left,text='+ 新建子课题',command=self.new_subproject).pack(side='bottom',fill='x',before=self.projects)
-        ttk.Button(left,text='标签自动归类规则',command=self.project_tag_rules).pack(side='bottom',fill='x',pady=8,before=self.projects)
-        ttk.Button(left,text='标签管理',command=self.manage_tags).pack(side='bottom',fill='x',pady=4,before=self.projects)
         filterbar=ttk.Frame(right,style='Card.TFrame');filterbar.pack(fill='x',pady=(2,10))
         self.scope_title=tk.StringVar(value='全部文献')
-        scope_label=ttk.Label(filterbar,textvariable=self.scope_title,font=(FONT,12,'bold'),style='Card.TLabel')
-        scope_label.grid(row=0,column=0,sticky='w',padx=(0,12))
+        scope_label=ttk.Label(filterbar,textvariable=self.scope_title,font=(FONT,12,'bold'),style='Card.TLabel',wraplength=420)
+        scope_label.grid(row=0,column=0,columnspan=2,sticky='w',padx=(0,12))
+        self.package_button=ttk.Button(filterbar,text='打包课题',command=self.package_topic,style='Accent.TButton')
+        self.package_button.grid(row=0,column=2,sticky='e');self.controls.append(self.package_button)
+        filterbar.bind('<Configure>',lambda event:scope_label.configure(wraplength=max(120,event.width-self.package_button.winfo_reqwidth()-18)))
         self._search_job=None
         self.search.trace_add('write',self.schedule_search)
         self.status_filter=tk.StringVar(value='全部状态');self.rating_filter=tk.StringVar(value='全部评分');self.tag_filter=tk.StringVar(value='全部标签')
-        search_entry=ttk.Entry(filterbar,textvariable=self.search,width=20);search_entry.grid(row=0,column=1,sticky='ew')
+        ttk.Label(filterbar,text='搜索文献',style='CardMuted.TLabel').grid(row=1,column=0,sticky='w',padx=(0,10),pady=(10,0))
+        search_entry=ttk.Entry(filterbar,textvariable=self.search,width=20);search_entry.grid(row=1,column=1,sticky='ew',padx=(0,10),pady=(10,0))
         self.search_entry=search_entry
         filterbar.columnconfigure(1,weight=1)
         self.filter_summary=tk.StringVar(value='点击列名排序 · ▾ 筛选')
-        ttk.Label(filterbar,textvariable=self.filter_summary,style='CardMuted.TLabel').grid(row=0,column=2,padx=10)
-        ttk.Button(filterbar,text='清除筛选',command=self.clear_column_filters,style='Subtle.TButton').grid(row=0,column=3)
+        ttk.Label(filterbar,textvariable=self.filter_summary,style='CardMuted.TLabel').grid(row=2,column=0,columnspan=3,sticky='w',pady=(7,0))
+        ttk.Button(filterbar,text='清除筛选',command=self.clear_column_filters,style='Subtle.TButton').grid(row=1,column=2,pady=(10,0))
         from library_table import TableState
         self.table_state=TableState()
         table=ttk.Frame(right,style='Card.TFrame');table.pack(fill='both',expand=True)
@@ -102,6 +108,7 @@ class LibraryWindow:
         self.context_menu.add_command(label='Word / PDF 互转',command=self.convert_document)
         self.context_menu.add_command(label='打开已下载原文所在位置',command=self.open_document_location)
         self.context_menu.add_command(label='编辑标签',command=self.edit_tags)
+        self.context_menu.add_command(label='打包当前课题…',command=self.package_topic)
         self.context_menu.add_command(label='ChatGPT 通篇解读 / 修改模板',command=self.chat_full_paper)
         states=tk.Menu(self.context_menu,tearoff=False);ratings=tk.Menu(self.context_menu,tearoff=False)
         for value in READING_STATES:states.add_command(label=value,command=lambda v=value:self.mark(v))
@@ -109,33 +116,57 @@ class LibraryWindow:
         self.context_menu.add_cascade(label='阅读状态',menu=states);self.context_menu.add_cascade(label='文献评分',menu=ratings)
         self.context_menu.add_separator();self.context_menu.add_command(label='删除文献',command=self.delete_selected);self.context_menu.add_command(label='恢复最近删除',command=self.restore_deleted)
         self.tree.bind('<Control-a>',lambda _:self.select_all(False))
-        selection_bar=ttk.Frame(footer,padding=(24,8,24,0));selection_bar.pack(fill='x')
-        flow_bar(selection_bar)
-        for title,command in [('选择所有文献',lambda:self.select_all(False)),('选择所有已下载',lambda:self.select_all(True)),('识别 / 修改显示名称',self.rename_selected),('删除文献',self.delete_selected),('恢复最近删除',self.restore_deleted)]:
-            b=ttk.Button(selection_bar,text=title,command=command);b.pack(side='left',padx=(0,8));self.controls.append(b)
         actions=ttk.Frame(footer,padding=(24,8,24,8));actions.pack(fill='x')
         flow_bar(actions)
-        for title,command in [('下载原文',self.download_selected),('阅读正文',self.open_pdf),('附件 / 比对',self.attachments),('编辑信息',self.edit),('添加关系',self.add_relationship),('分配课题',self.assign),('标记已读',lambda:self.mark('已读')),('标记未读',lambda:self.mark('未读'))]:
-            button=ttk.Button(actions,text=title,command=command,style='Accent.TButton' if title=='阅读正文' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
+        self.selection_summary=tk.StringVar(value='已选 0 篇')
+        ttk.Label(actions,textvariable=self.selection_summary,style='Muted.TLabel').pack(side='left',padx=(0,10))
+        self.action_menu(actions,'选择', [('选择所有文献',lambda:self.select_all(False)),('选择所有已下载',lambda:self.select_all(True)),('取消选择',lambda:self.tree.selection_remove(*self.tree.selection()))])
+        self.selection_controls=[]
+        for title,command in [('阅读正文',self.open_pdf),('下载原文',self.download_selected),('附件 / 比对',self.attachments),('编辑信息',self.edit),('分配课题',self.assign)]:
+            button=ttk.Button(actions,text=title,command=command,style='Accent.TButton' if title=='阅读正文' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button);self.selection_controls.append(button)
+        self.action_menu(actions,'更多操作', [('识别 / 修改显示名称',self.rename_selected),('添加关系',self.add_relationship),('编辑标签',self.edit_tags),('标记已读',lambda:self.mark('已读')),('标记未读',lambda:self.mark('未读')),('删除文献',self.delete_selected),('恢复最近删除',self.restore_deleted)])
         self.details=tk.StringVar(value='选择文献可查看 DOI、摘要和附件位置。')
-        detail_card=ttk.Frame(footer,style='Card.TFrame',padding=(16,8));detail_card.pack(fill='x',padx=24)
+        self.detail_button=ttk.Button(actions,text='展开详情',command=self.toggle_details,style='Subtle.TButton');self.detail_button.pack(side='left')
+        detail_card=ttk.Frame(footer,style='Card.TFrame',padding=(16,8));self.detail_card=detail_card
         ttk.Label(detail_card,text='文献详情  /  PAPER INSIGHT',foreground=ACCENT,background=PANEL,font=(FONT,9,'bold')).pack(anchor='w',pady=(0,5))
         detail_text=tk.Text(detail_card,height=3,wrap='word',bg=PANEL,fg=MUTED,font=(FONT,10),relief='flat',state='disabled')
         detail_text.pack(fill='x')
         def update_details(*_):
             detail_text.configure(state='normal');detail_text.delete('1.0','end');detail_text.insert('1.0',self.details.get());detail_text.configure(state='disabled')
         self.details.trace_add('write',update_details);update_details()
-        ttk.Label(footer,textvariable=self.status,padding=(24,8),style='Muted.TLabel').pack(fill='x')
+        self.status_label=ttk.Label(footer,textvariable=self.status,padding=(24,8),style='Muted.TLabel');self.status_label.pack(fill='x')
         self.refresh();self.win.after(120,self.poll)
         if not embedded:self.win.protocol('WM_DELETE_WINDOW',self.close)
 
     def close(self):
-        if self.busy or any(w and not w.closed and w.busy for w in (self.word_citations,self.attachment_window,self.conversion_window)):
+        if self.busy or any(w and not w.closed and w.busy for w in (self.word_citations,self.attachment_window,self.conversion_window,self.package_window)):
             self.status.set('操作仍在进行，完成后可关闭。');return
-        for window in (self.word_citations,self.attachment_window,self.conversion_window):
+        for window in (self.word_citations,self.attachment_window,self.conversion_window,self.package_window):
             if window and not window.closed:window.close()
         self.library.close();self.win.destroy()
         if getattr(self,'_chat_bridge',None):self._chat_bridge.close()
+
+    def action_menu(self,parent,title,commands,fill=False):
+        button=ttk.Menubutton(parent,text=title)
+        menu=tk.Menu(button,tearoff=False)
+        for label,command in commands:menu.add_command(label=label,command=command)
+        button.configure(menu=menu)
+        button.pack(fill='x' if fill else None,side='top' if fill else 'left',padx=(0,0 if fill else 8))
+        self.controls.append(button)
+        return button
+
+    def toggle_details(self):
+        opened=bool(self.detail_card.winfo_manager())
+        if opened:self.detail_card.pack_forget()
+        else:self.detail_card.pack(fill='x',padx=24,before=self.status_label)
+        self.detail_button.configure(text='展开详情' if opened else '收起详情')
+
+    def package_topic(self):
+        if self.busy:return
+        if self.package_window and not self.package_window.closed:
+            self.package_window.win.lift();return
+        from topic_package_ui import TopicPackageWindow
+        self.package_window=TopicPackageWindow(self.win,self.library,self.current_project)
 
     def attachments(self):
         if self.busy:return
@@ -205,7 +236,8 @@ class LibraryWindow:
         selected=set(self.tree.selection());self.tree.delete(*self.tree.get_children())
         query=self.search.get().lower()
         scope_name=self.library.project(self.current_project)['name'] if self.current_project else '全部文献'
-        self.scope_title.set(scope_name if len(scope_name)<=18 else scope_name[:17]+'…')
+        self.scope_title.set(scope_name if len(scope_name)<=30 else scope_name[:29]+'…')
+        self.package_button.configure(text='打包课题' if self.current_project else '打包全部')
         index=0
         projects={p['id']:p['name'] for p in self.project_rows}
         scope=self._project_scopes.get(self.current_project) if self.current_project else None
@@ -230,6 +262,7 @@ class LibraryWindow:
             self.tree.heading(key,text=label+indicator+(' ·' if key in self.table_state.filters else '')+'  ▾')
         count=len(self.table_state.filters)
         self.filter_summary.set(f'{index} 篇 · {count} 列已筛选' if count else f'{index} 篇 · 点击列名排序 / ▾ 筛选')
+        self.detail()
 
     def sort_column(self,key):
         self.table_state.sort(key);self.refresh_records()
@@ -266,7 +299,11 @@ class LibraryWindow:
         return ids[0] if one else list(ids)
 
     def detail(self,_=None):
-        if not self.tree.selection():return
+        selected=self.tree.selection()
+        self.selection_summary.set(f'已选 {len(selected)} 篇')
+        for button in self.selection_controls:button.configure(state='normal' if selected and not self.busy else 'disabled')
+        if not selected:
+            self.details.set('选择文献可查看 DOI、摘要和附件位置。');return
         r=self.library.get(self.tree.selection()[0]);names=' / '.join(self.library.project(p)['name'] for p in r['projects'])
         self.details.set(f"{r['authors'][:150]} · DOI: {r['doi'] or '待补充'}\n课题：{names} · 标签：{'；'.join(r.get('tags',[])) or '无'} · 评分：{'★'*r.get('rating',0) or '未评分'}\n{r['abstract'][:220] or '摘要待补充'}")
 

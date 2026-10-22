@@ -283,7 +283,7 @@ class App:
             word.status.set('Word 引用仍在处理，完成后即可退出。');return
         if self.library_window and self.library_window.busy:
             self.library_window.status.set('归档操作仍在进行，完成后可退出。');return
-        for window in (getattr(self.library_window,'attachment_window',None),getattr(self.library_window,'conversion_window',None)):
+        for window in (getattr(self.library_window,'attachment_window',None),getattr(self.library_window,'conversion_window',None),getattr(self.library_window,'package_window',None)):
             if window and not window.closed and window.busy:
                 window.win.lift();return
         if self.reader_page:
@@ -293,7 +293,7 @@ class App:
         try:self.reading_clock.stop()
         except Exception as exc:messagebox.showerror('阅读统计未保存',str(exc),parent=self.root);return
         if word and not word.closed:word.close()
-        for window in (getattr(self.library_window,'attachment_window',None),getattr(self.library_window,'conversion_window',None)):
+        for window in (getattr(self.library_window,'attachment_window',None),getattr(self.library_window,'conversion_window',None),getattr(self.library_window,'package_window',None)):
             if window and not window.closed:window.close()
         if self.library_window:self.library_window.library.close()
         if self.graph_page:self.graph_page.close()

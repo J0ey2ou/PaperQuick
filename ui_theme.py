@@ -194,6 +194,11 @@ def install_theme(root):
                     borderwidth=0, relief='flat', focuscolor=ACCENT, focusthickness=1)
     style.map('TButton', background=[('disabled', SURFACE), ('pressed', tokens['pressed']), ('active', tokens['hover'])],
               foreground=[('disabled', tokens['disabled']), ('!disabled', FG)])
+    style.configure('TMenubutton', background=SURFACE, foreground=FG, padding=(12,8),
+                    arrowcolor=FG, borderwidth=0, relief='flat')
+    style.map('TMenubutton', background=[('disabled', SURFACE), ('pressed', tokens['pressed']), ('active', tokens['hover'])],
+              foreground=[('disabled', tokens['disabled']), ('!disabled', FG)],
+              arrowcolor=[('disabled', tokens['disabled']), ('!disabled', FG)])
     style.configure('Accent.TButton', background=ACCENT, foreground=tokens['accent_fg'],
                     font=(FONT, 10, 'bold'), padding=(18, 10), borderwidth=0)
     style.map('Accent.TButton', background=[('disabled', SURFACE), ('pressed', tokens['accent_pressed']), ('active', tokens['accent_hover'])],

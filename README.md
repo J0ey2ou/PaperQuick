@@ -2,6 +2,8 @@
 
 **macOS 试用包**：[Apple 芯片与 Intel 下载](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.7.0-macos.1) · [Mac 安装说明与功能边界](docs/macos-preview.md)。按用户要求仅打包，未进行 Mac 功能测试，未 Apple 公证；Windows 正式更新通道不变。
 
+**v3.8.4**：新增课题一键打包，默认全选课题及子课题，支持逐篇或逐附件取消勾选、ZIP / 文件夹导出；整理文献分类布局与选择状态。[本版说明](docs/v3.8.4-upgrade.md)。
+
 **v3.8.3**：修复聊天悬浮层遮挡和 PDF 控件误选；内嵌操作收进软件工具栏，六家共享上传与完成检测，并补充可信文件事件后备接入。扩展 2.6.1。[本版说明](docs/v3.8.3-upgrade.md)。
 
 **v3.8.2**：修复内嵌灰屏，直接使用原生 WebView2 控制器，统一 DPI 与兼容渲染，新增独立桌面中真实页签与渲染可见链验证。[本版说明](docs/v3.8.2-upgrade.md)。
@@ -20,7 +22,7 @@
 
 从导师发来的一个标题，到课题文件夹里的一篇论文，再到阅读笔记和写作引用。Windows 本地文献工作区，连接 **查询 → 下载归档 → 分类与附件 → 阅读比对 → 关系探索 → 阅读回顾 → Word 写作**。
 
-[下载 v3.8.3 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.3/PaperQuick-v3.8.3-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.8.3) · [v3.8.3 升级指南](docs/v3.8.3-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
+[下载 v3.8.4 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.4/PaperQuick-v3.8.4-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.8.4) · [v3.8.4 升级指南](docs/v3.8.4-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
 
 **v3.2 新增**：Word 导入与分页预览、Word / PDF 互转、文献附件关联与并排比对、31 套 Word 引用格式，以及主题关键词、检索式、引用与被引探索和新文献追踪。
 
@@ -30,7 +32,7 @@
 
 ## 安装与升级
 
-1. 在 Releases 下载 `PaperQuick-v3.4-Windows.zip`，解压完整文件夹到可写目录。
+1. 在 Releases 下载 `PaperQuick-v3.8.4-Windows.zip`，解压完整文件夹到可写目录。
 2. 双击 `文献直达.exe`，保留同目录的 `全局选词助手.exe`、`browser-extension` 和说明文件。
 3. 复制一个英文标题或 DOI，在 **文献查询 → 粘贴并查找** 试用。
 4. 升级时先从托盘 **退出文献直达**，备份原文件夹，再覆盖程序文件。保留 `本地文献库`、`settings.json`、`shortcut.json`，不要用空库替换旧库。备份请在退出后复制完整 `本地文献库`，其中包含文献信息、正文、附件、笔记和阅读记录。
@@ -50,8 +52,11 @@
 1. 查询结果点击 **收藏 / 下载归档**，选择或新建课题。可下载的直接 PDF 自动归档；需要网页操作时打开对应全文 / 出版社页面。
 2. **文献分类 → 导入文件** 支持 PDF、DOCX、DOC、TXT、Markdown；**导入文件夹** 扫描子目录后先勾选文件再导入，支持撤回最近一批导入。还可手工新增条目和编辑信息、删除与恢复文献。右键 **下载原文（打开下载页面）** 跳转对应页面；**下载并自动归档** 查找开放版本并保存。
 3. 浏览器完成机构登录并下载的 PDF，通过 **关联已下载 PDF** 或 **导入 PDF / Word** 归档。当前不监控浏览器下载目录，不会猜测新下载文件属于哪篇文献。
-4. **命名规则** 用于生成软件中的显示名称，支持 `{年份}`、`{第一作者}`、`{标题}`、`{期刊}`、`{DOI}`、`{课题}`；默认使用完整论文标题。显示名称保留正常标点，不附加 PDF / Word 扩展名。
+4. **文献库工具 → 命名规则** 用于生成软件中的显示名称，支持 `{年份}`、`{第一作者}`、`{标题}`、`{期刊}`、`{DOI}`、`{课题}`；默认使用完整论文标题。显示名称保留正常标点，不附加 PDF / Word 扩展名。
 5. 选中文献后右键 **识别 / 修改显示名称**。软件先读取文件，再逐篇核对或编辑显示名称。也可按规则批量生成预览。没有附件或识别失败时仍可手动改名。此操作不会重命名原始文件或已归档附件。
+6. **课题一键打包**：在左侧选中课题，点击课题标题旁的 **打包课题**。弹窗默认勾选该课题及所有子课题的文献，不受列表搜索或筛选影响；可以取消整篇文献，也可以展开后取消某个正文或补充附件。选择 **ZIP 压缩包 / 文件夹**、保存位置和名称后开始打包。全部文献视图可点击 **打包全部**，弹窗内也能切换课题。
+
+打包按文献分别存放已归档正文和补充附件，并附 `文献目录.csv`、`打包清单.json`。未下载文献保留目录记录，缺失或路径异常的附件明确标记，网址仅保存链接，不自动下载。保存位置需在文献库之外；同名输出自动编号，取消或失败时清理本次未完成的输出。此功能用于分享文件，完整备份仍需在退出后复制文献库。页面低频操作收进 **文献库工具 / 课题与标签管理 / 更多操作**，底部显示已选篇数，详情可以展开或收起。
 
 “已归档正文”统计 PDF 或 Word 主文件，只有补充材料或网址的文献仍可继续查找正文。重新导入相同文件会复用记录；归档副本丢失时会恢复附件，保留其名称、关联笔记和批注。原位置存在不同内容时另存一份，避免覆盖。
 
@@ -165,7 +170,7 @@ citeproc-js implements the Citation Style Language · © Frank Bennett. [Citatio
 
 ### Install and update
 
-Download [PaperQuick-v3.4-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.4.0/PaperQuick-v3.4-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Exit from the tray before updating, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
+Download [PaperQuick-v3.8.4-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.4/PaperQuick-v3.8.4-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Existing installations can check for updates in Settings and install after normal exit. For a manual update, exit from the tray, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
 
 **Installed Microsoft Word for Windows is required for Word pagination, Word-to-PDF conversion and citation insertion.** PDF-to-Word conversion, PDF reading and DOCX import/storage do not require Word. WPS and Word Online are not supported substitutes for the features that require Word.
 

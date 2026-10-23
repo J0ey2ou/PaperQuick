@@ -95,10 +95,10 @@ class DocumentCanvas:
             self.r.page_label.set(f'第 {current+1} / {self.r.count} 页 · {round(self.r.scale*100)}%'+(' · 连续阅读' if self.r.continuous.get() else ''))
         for n in visible:
             if n in self.cache or n in self.pending:continue
-            self.pending.add(n);path=self.r.path;scale=self.r.scale;sign=self.sign;generation=self.r.generation
+            self.pending.add(n);path=self.r.path;scale=self.r.scale;sign=self.sign;generation=self.r.generation;events=self.r.events
             def job(page=n):
-                try:self.r.events.put(('canvas-page',generation,(sign,page,render_page_data(path,page,scale),None)))
-                except Exception as exc:self.r.events.put(('canvas-page',generation,(sign,page,None,str(exc))))
+                try:events.put(('canvas-page',generation,(sign,page,render_page_data(path,page,scale),None)))
+                except Exception as exc:events.put(('canvas-page',generation,(sign,page,None,str(exc))))
             threading.Thread(target=job,daemon=True).start()
         # Keep only visible pages and nearby pages; a long thesis stays bounded.
         keep=set(visible)|{self.r.page}

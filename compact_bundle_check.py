@@ -151,7 +151,9 @@ def run(root,report):
             assert combined.getpixel((20,400))==(0,0,255)
             helper.assert_not_called();browser.assert_not_called()
             assert converter_path().is_file() and bridge_path().is_file()
+            from research_bundle_check import run as check_research
+            research_checks=check_research(instance,folder)
             instance.close()
     report.write_text(json.dumps({'passed':True,'version':VERSION,'project':PROJECT_URL,'frozen':bool(getattr(sys,'frozen',False)),
         'checks':['single-row reader and comparison','toolbar icons bundled','automatic settings persistence','existing library and unknown preferences retained','Word helpers present','ChatGPT bridge bundled without browser launch','cross-page document crop contains both pages','tags and nested projects','ratings persisted','whole-paper prompt template','Word CSL citation and automatic bibliography plan','settings updater bundled','topic package hidden dialog and ZIP/folder workers'],
-        'background_only':True},ensure_ascii=False,indent=2),'utf-8')
+        'research_checks':research_checks,'background_only':True},ensure_ascii=False,indent=2),'utf-8')

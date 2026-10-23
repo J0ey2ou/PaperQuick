@@ -17,6 +17,7 @@ import urllib.parse
 from paper_finder import find_papers, LookupError, BrowserPageRequired, safe_link, automatic_target
 from shortcuts import load_shortcut, parse_shortcut, save_shortcut
 from ui_theme import BG, FG, MUTED, ACCENT as BLUE, PANEL, INPUT, LINE, FONT, install_theme, emblem, opening_animation, window_icon, style_dialog
+from workspace_app import WorkspaceAppMixin
 
 
 
@@ -24,7 +25,7 @@ def app_dir():
     return Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 
 
-class App:
+class App(WorkspaceAppMixin):
     def __init__(self, root):
         self.root = root
         root.title("文献直达")
@@ -45,7 +46,9 @@ class App:
         install_theme(root)
         window_icon(root)
         self.library_window = None
-        self.library_directory=app_dir()/'本地文献库'
+        configured_library=self.preferences.get('library_directory')
+        self.library_directory=Path(configured_library).resolve() if configured_library else app_dir()/'本地文献库'
+        self.init_workspace()
         self.graph_page = None
         self.reader_page = None
         self.summary_view=None;self.summary_dialog=None;self.settings_page=None
@@ -57,15 +60,34 @@ class App:
         navigation=tk.Frame(root,bg=BG)
         self.navigation=navigation
         navigation.pack(fill='x',padx=26,pady=(18,8))
-        emblem(navigation,52).pack(side='left',padx=(0,10))
-        tk.Label(navigation,text='文献直达',bg=BG,fg=FG,font=(FONT,17,'bold')).pack(side='left')
-        tabs=tk.Frame(navigation,bg=BG);tabs.pack(side='left',padx=24)
+        brand=tk.Frame(navigation,bg=BG)
+        emblem(brand,52).pack(side='left',padx=(0,10))
+        tk.Label(brand,text='文献直达',bg=BG,fg=FG,font=(FONT,17,'bold')).pack(side='left')
+        tabs=tk.Frame(navigation,bg=BG)
         self.nav_buttons={}
-        for key,title in [('query','文献查询'),('library','文献分类'),('graph','文献图谱'),('reader','文献阅读')]:
+        for key,title in [('workspace','研究工作台'),('query','文献查询'),('library','文献分类'),('graph','文献图谱'),('reader','文献阅读')]:
             button=ttk.Button(tabs,text=title,style='ActiveNav.TButton' if key=='query' else 'Nav.TButton',command=lambda k=key:self.show_page(k))
             button.pack(side='left',padx=3);self.nav_buttons[key]=button
-        ttk.Button(navigation,text='设置',command=self.settings).pack(side='right')
-        ttk.Button(navigation,text='阅读总结',command=self.show_summary).pack(side='right',padx=8)
+        nav_actions=tk.Frame(navigation,bg=BG)
+        ttk.Button(nav_actions,text='设置',command=self.settings).pack(side='right')
+        ttk.Button(nav_actions,text='阅读总结',command=self.show_summary).pack(side='right',padx=8)
+        self._nav_compact=None
+        def arrange_navigation(_=None):
+            required=brand.winfo_reqwidth()+tabs.winfo_reqwidth()+nav_actions.winfo_reqwidth()+32
+            compact=navigation.winfo_width()<required
+            if compact==self._nav_compact:return
+            self._nav_compact=compact
+            for child in (brand,tabs,nav_actions):child.grid_forget()
+            navigation.columnconfigure(1,weight=1);navigation.columnconfigure(2,weight=0)
+            brand.grid(row=0,column=0,sticky='w')
+            if compact:
+                nav_actions.grid(row=0,column=1,sticky='e')
+                tabs.grid(row=1,column=0,columnspan=2,sticky='w',pady=(8,0))
+            else:
+                tabs.grid(row=0,column=1,sticky='w',padx=16)
+                nav_actions.grid(row=0,column=2,sticky='e')
+        navigation.bind('<Configure>',arrange_navigation)
+        navigation.after_idle(arrange_navigation)
         self.page_host=tk.Frame(root,bg=BG);self.page_host.pack(fill='both',expand=True)
         page=tk.Frame(self.page_host,bg=BG);page.pack(fill='both',expand=True)
         self.query_page=page
@@ -152,17 +174,20 @@ class App:
             self.library_window.lookup_email=lambda:self.email
             self.library_window.before_remove=self.before_remove_papers
             self.library_window.on_library_changed=self.refresh_library_views
+            self.library_window.task_manager=self.tasks()
         self.show_page('library')
         if paper:
             self.library_window.collect(paper)
         return self.library_window
 
     def show_page(self, key):
+        if self.current_page=='workspace' and self.workspace_page:self.workspace_page.save_question(silent=True)
         if self.current_page=='settings' and key!='settings':self.flush_settings()
         if key!='reader' and self.reader_page and self.reader_page.focus_mode:self.reader_page.toggle_focus()
         if key!=self.current_page:self.stop_reading()
         if key=='library' and not self.library_window:
             self.open_library();return
+        if key=='workspace' and not self.workspace_page:self.make_workspace()
         if key=='graph' and not self.graph_page:
             from graph_ui import GraphPage
             self.graph_page=GraphPage(self.page_host,self.library_directory)
@@ -178,13 +203,16 @@ class App:
             self.reader_page.on_focus_mode=self.reader_focus_mode
             self.reader_page.on_document_change=self.stop_reading
             self.reader_page.on_library_changed=self.refresh_library_views
+            self.reader_page.on_evidence=self.capture_evidence
+            self.reader_page.task_manager=self.tasks()
         for child in self.page_host.winfo_children():child.pack_forget()
-        target=self.query_page if key=='query' else self.library_window.win if key=='library' else self.graph_page.frame if key=='graph' else self.reader_page.frame if key=='reader' else self.settings_page
+        target=self.workspace_page.frame if key=='workspace' else self.query_page if key=='query' else self.library_window.win if key=='library' else self.graph_page.frame if key=='graph' else self.reader_page.frame if key=='reader' else self.settings_page
         target.pack(fill='both',expand=True)
         self.current_page=key
         if key=='library':self.library_window.refresh()
         for name,button in self.nav_buttons.items():button.configure(style='ActiveNav.TButton' if name==key else 'Nav.TButton')
         if key=='graph':self.graph_page.refresh()
+        if key=='workspace':self.workspace_page.refresh()
         from ui_theme import apply_skin
         apply_skin(self.root,self.skin)
 
@@ -286,6 +314,7 @@ class App:
         for window in (getattr(self.library_window,'attachment_window',None),getattr(self.library_window,'conversion_window',None),getattr(self.library_window,'package_window',None)):
             if window and not window.closed and window.busy:
                 window.win.lift();return
+        if not self.can_close_workspace():return
         if self.reader_page:
             try:
                 if self.reader_page.close() is False:return
@@ -298,6 +327,7 @@ class App:
         if self.library_window:self.library_window.library.close()
         if self.graph_page:self.graph_page.close()
         if self.summary_view:self.summary_view.close()
+        self.close_workspace(discard_confirmed=True)
         self.tracking.close()
         if getattr(self,'desktop',None):self.desktop.close()
         self.root.destroy()
@@ -535,6 +565,10 @@ class App:
         viewport.bind('<Configure>',lambda e:viewport.itemconfigure(panel_id,width=e.width))
         self.settings_panel=panel
         ttk.Label(panel,text='设置',font=(FONT,21,'bold')).pack(anchor='w',pady=(0,12))
+        ttk.Label(panel,text=f'当前文献库：{self.library_directory}',style='Muted.TLabel',wraplength=850).pack(anchor='w')
+        library_tools=ttk.Frame(panel);library_tools.pack(fill='x',pady=(8,18))
+        ttk.Button(library_tools,text='备份 / 恢复 / 任务中心',command=self.open_maintenance).pack(side='left')
+        ttk.Button(library_tools,text='选择下次启动的文献库',command=self.select_library_next_start).pack(side='left',padx=8)
         from ui_theme import SKINS,SKIN_DESCRIPTIONS,_tokens,apply_skin
         ttk.Label(panel,text='界面皮肤（即时预览）',font=(FONT,12,'bold')).pack(anchor='w')
         skin=tk.StringVar(value=self.skin);skin_combo=ttk.Combobox(panel,textvariable=skin,values=list(SKINS),state='readonly',width=30);skin_combo.pack(anchor='w',pady=(7,6))
@@ -710,7 +744,15 @@ def main():
     if '--background' in sys.argv:root.withdraw()
     if len(sys.argv)==3 and sys.argv[1]=='--verify-compact-bundle':
         from compact_bundle_check import run
-        run(root,sys.argv[2]);return
+        root.withdraw()
+        try:run(root,sys.argv[2])
+        except Exception:
+            import traceback
+            Path(sys.argv[2]).write_text(json.dumps({'passed':False,'background_only':True,'error':traceback.format_exc()},ensure_ascii=False,indent=2),'utf-8')
+            try:root.destroy()
+            except tk.TclError:pass
+            raise SystemExit(1)
+        return
     # 只用于打包验收：加载 Tcl/Tk 和结果界面后写入指定报告，不联网。
     if len(sys.argv) == 3 and sys.argv[1] == "--verify-bundle":
         from paper_finder import Paper, Result

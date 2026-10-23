@@ -2,6 +2,8 @@
 
 **macOS 试用包**：[Apple 芯片与 Intel 下载](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.7.0-macos.1) · [Mac 安装说明与功能边界](docs/macos-preview.md)。按用户要求仅打包，未进行 Mac 功能测试，未 Apple 公证；Windows 正式更新通道不变。
 
+**v3.9.0**：新增研究工作台、智能视图、阅读现场恢复、完整备份与任务中心；逐页全文检索与本地 OCR、可回源证据卡和比较矩阵；跨文献 AI 选文预览与引文校验、综述提纲导出、两阶段筛选、完整课题交接。[功能入口与升级说明](docs/v3.9.0-upgrade.md)。
+
 **v3.8.5**：修正工具栏图标居中与间距，统一控件与选中状态；新增奶油暖砂、雾松绿、暮色玫瑰和夜读黑，设置内可实时预览。[本版说明](docs/v3.8.5-upgrade.md)。
 
 **v3.8.4**：新增课题一键打包，默认全选课题及子课题，支持逐篇或逐附件取消勾选、ZIP / 文件夹导出；整理文献分类布局与选择状态。[本版说明](docs/v3.8.4-upgrade.md)。
@@ -24,7 +26,7 @@
 
 从导师发来的一个标题，到课题文件夹里的一篇论文，再到阅读笔记和写作引用。Windows 本地文献工作区，连接 **查询 → 下载归档 → 分类与附件 → 阅读比对 → 关系探索 → 阅读回顾 → Word 写作**。
 
-[下载 v3.8.5 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.5/PaperQuick-v3.8.5-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.8.5) · [v3.8.5 升级指南](docs/v3.8.5-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
+[下载 v3.9.0 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.9.0/PaperQuick-v3.9.0-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.9.0) · [v3.9.0 升级指南](docs/v3.9.0-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
 
 **v3.2 新增**：Word 导入与分页预览、Word / PDF 互转、文献附件关联与并排比对、31 套 Word 引用格式，以及主题关键词、检索式、引用与被引探索和新文献追踪。
 
@@ -34,7 +36,7 @@
 
 ## 安装与升级
 
-1. 在 Releases 下载 `PaperQuick-v3.8.5-Windows.zip`，解压完整文件夹到可写目录。
+1. 在 Releases 下载 `PaperQuick-v3.9.0-Windows.zip`，解压完整文件夹到可写目录。
 2. 双击 `文献直达.exe`，保留同目录的 `全局选词助手.exe`、`browser-extension` 和说明文件。
 3. 复制一个英文标题或 DOI，在 **文献查询 → 粘贴并查找** 试用。
 4. 升级时先从托盘 **退出文献直达**，备份原文件夹，再覆盖程序文件。保留 `本地文献库`、`settings.json`、`shortcut.json`，不要用空库替换旧库。备份请在退出后复制完整 `本地文献库`，其中包含文献信息、正文、附件、笔记和阅读记录。
@@ -58,7 +60,7 @@
 5. 选中文献后右键 **识别 / 修改显示名称**。软件先读取文件，再逐篇核对或编辑显示名称。也可按规则批量生成预览。没有附件或识别失败时仍可手动改名。此操作不会重命名原始文件或已归档附件。
 6. **课题一键打包**：在左侧选中课题，点击课题标题旁的 **打包课题**。弹窗默认勾选该课题及所有子课题的文献，不受列表搜索或筛选影响；可以取消整篇文献，也可以展开后取消某个正文或补充附件。选择 **ZIP 压缩包 / 文件夹**、保存位置和名称后开始打包。全部文献视图可点击 **打包全部**，弹窗内也能切换课题。
 
-打包按文献分别存放已归档正文和补充附件，并附 `文献目录.csv`、`打包清单.json`。未下载文献保留目录记录，缺失或路径异常的附件明确标记，网址仅保存链接，不自动下载。保存位置需在文献库之外；同名输出自动编号，取消或失败时清理本次未完成的输出。此功能用于分享文件，完整备份仍需在退出后复制文献库。页面低频操作收进 **文献库工具 / 课题与标签管理 / 更多操作**，底部显示已选篇数，详情可以展开或收起。
+打包按文献分别存放已归档正文和补充附件，并附 `文献目录.csv`、`打包清单.json`。未下载文献保留目录记录，缺失或路径异常的附件明确标记，网址仅保存链接，不自动下载。保存位置需在文献库之外；同名输出自动编号，取消或失败时清理本次未完成的输出。此功能用于分享文件；完整备份可使用 **设置 → 备份 / 恢复 / 任务中心 → 创建备份 ZIP**，恢复时校验并写入新目录。页面低频操作收进 **文献库工具 / 课题与标签管理 / 更多操作**，底部显示已选篇数，详情可以展开或收起。
 
 “已归档正文”统计 PDF 或 Word 主文件，只有补充材料或网址的文献仍可继续查找正文。重新导入相同文件会复用记录；归档副本丢失时会恢复附件，保留其名称、关联笔记和批注。原位置存在不同内容时另存一份，避免覆盖。
 
@@ -88,7 +90,7 @@ Word 阅读显示分页预览；点击 **编辑原文** 可在阅读框中修改
 - **阅读区右键 → 添加阅读笔记**，快速插入当前页记录；有当前页最近框选文字时一并带入。右键还可在点击位置添加批注和书签。
 - 阅读工具支持 **框选高亮 / 框选批注 / 复制文字**，拖出选区即可操作；批注列表支持定位、编辑、删除，颜色可选。
 - **参考文献侧栏** 可独立打开，也可嵌入阅读页顶部。优先保留原始编号；显示 `1*` 等星号时只是提取顺序，原编号未识别，请回原文核对。条目可查原文、下载归档或收藏到课题；本版修复 BMJ 无标题、断行 DOI 等常见提取问题。
-- 笔记、书签和批注存放在本地库，PDF 原文件不改写，其他阅读器不会自动显示本软件批注。扫描版 PDF 和复杂分栏可能无法正确提取文字或引用，当前不内置 OCR。
+- 笔记、书签和批注存放在本地库，PDF 原文件不改写，其他阅读器不会自动显示本软件批注。扫描版 PDF 和复杂分栏可能无法正确提取文字或引用；全文索引可配置本地 Tesseract OCR，引擎及语言数据需自行安装，识别结果用于检索，不改写扫描原件。
 
 ## 离线图谱
 
@@ -162,6 +164,8 @@ citeproc-js implements the Citation Style Language · © Frank Bennett. [Citatio
 
 ## English
 
+**v3.9.0:** project workbench, smart views, reading resume, verified backups and a persistent task center; complete full-text indexing with optional local Tesseract OCR; evidence cards, comparison matrices, source-previewed cross-document AI, outlines and project handoff. AI requires your configured provider and explicit sending. OCR engines are not bundled. See the [upgrade guide](docs/v3.9.0-upgrade.md).
+
 **v3.4.0:** single-row icon tools in the reader, comparison and notes; hover descriptions and overflow menus retain every action. Settings save automatically across restarts. About includes the version and developer project. This is a complete upgrade: keep your existing library and settings. See the [upgrade guide](docs/v3.4-upgrade.md#english).
 
 **v3.3.0 reading update:** selective folder import and undo, recoverable deletion, continuous reading, PDF text selection, image notes, in-reader Word / TXT editing, position links, docked references, BMJ bibliography fixes and note nodes in the graph. See the [v3.3 guide](docs/v3.3-reading.md#english).
@@ -172,7 +176,7 @@ citeproc-js implements the Citation Style Language · © Frank Bennett. [Citatio
 
 ### Install and update
 
-Download [PaperQuick-v3.8.5-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.5/PaperQuick-v3.8.5-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Existing installations can check for updates in Settings and install after normal exit. For a manual update, exit from the tray, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
+Download [PaperQuick-v3.9.0-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.9.0/PaperQuick-v3.9.0-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Existing installations can check for updates in Settings and install after normal exit. For a manual update, exit from the tray, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Data maintenance also supports verified full-library backups and restoration into a new directory.
 
 **Installed Microsoft Word for Windows is required for Word pagination, Word-to-PDF conversion and citation insertion.** PDF-to-Word conversion, PDF reading and DOCX import/storage do not require Word. WPS and Word Online are not supported substitutes for the features that require Word.
 
@@ -183,7 +187,7 @@ Download [PaperQuick-v3.8.5-Windows.zip](https://github.com/J0ey2ou/PaperQuick/r
 3. **Download**: click `收藏 / 下载归档`, choose/create a project. Direct PDFs archive automatically; otherwise the relevant full-text/publisher page opens. Library right-click offers download-page navigation or automatic download and archiving. Manually downloaded subscription PDFs must be attached/imported; browser downloads are not monitored.
 4. **Import and rename**: import PDF, DOCX or DOC, individually or from a folder and its subfolders. Configure `{year}_{author}_{title}` or Chinese tokens `{年份}_{第一作者}_{标题}`. Right-click selected records to rename managed files, preserving real extensions and distinct supplement names; URL attachments are skipped. Whole-library selection clears filters. Original files are preserved. Reimporting a missing managed copy restores the existing attachment and retains its identity, notes and annotations; different content already at that path is not overwritten.
 5. **Read**: internal document actions open the reader, with continuous pages, text selection, focus mode and adjustable panes. Word offers pagination and a text-editing mode using installed desktop Word; saving updates the managed copy and preserves its prior version and original source. Notes autosave and support images, reading-area screenshots, custom templates and linked export. Right-click to add notes or document/web links. PaperQuick annotations live in the library; original Word/PDF comments are also visible.
-6. **References**: open the detachable panel. Original numbers are retained where recognized; `1*` indicates extraction order only. Verify before searching, collecting or downloading. Scans and complex layouts may need manual correction; OCR is not included.
+6. **References**: open the detachable panel. Original numbers are retained where recognized; `1*` indicates extraction order only. Verify before searching, collecting or downloading. Scans and complex layouts may need manual correction. Full-text search can use a separately installed local Tesseract engine; this does not change the original PDF or the reference parser.
 7. **Graph**: node-count slider, wheel zoom, blank-area pan, Shift box zoom, double-click neighborhood focus and reset. Candidates come from local references. Highlight by reading count, local citation count or PDF availability, with configurable colors/weights. Local citation counts are not global metrics.
 8. **Reading recap**: the title-bar `阅读总结` button opens a four-tab window without replacing your current page. Time counts only while the loaded reading page is in front of you; other apps, pages, the recap and a hidden window pause it. This is time spent on the page, not proof of attention or understanding. Time before recording began cannot be recovered. Recaps show your currently saved abstracts, notes and excerpts.
 9. **Settings**: Space Blue, Aurora Purple, Graphite and Light themes apply and save automatically. About shows the version and project link. Configure shortcuts, optional Unpaywall email and Windows sign-in background startup. Close hides to tray; double-click restores; tray Exit fully quits. No mouse-following overlay or local account system.

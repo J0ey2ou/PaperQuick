@@ -11,14 +11,16 @@ from pdf_reader_core import document_info,render_page,render_page_data,page_size
 from references import parse_references
 from ui_theme import BG,PANEL,FG,MUTED,ACCENT,FONT,style_dialog
 from reader_workflow_ui import ReaderWorkflow
+from reader_actions import ReaderActions
 
-class ReaderPage(ReaderWorkflow):
+class ReaderPage(ReaderActions,ReaderWorkflow):
     def __init__(self,parent,directory,on_query,on_collect):
         self.directory=Path(directory);self.on_query=on_query;self.on_collect=on_collect
         self.frame=tk.Frame(parent,bg=BG);self.events=queue.Queue();self.rid=None;self.path=None;self.page=0;self.count=0;self.scale=1.2;self.generation=0;self.references=[];self.loading=False;self.dirty=False;self.note_job=None
         self.annotations=[];self.selection_start=None;self.image_size=None;self.fit_pending=True
         self.source_path=None;self._import_busy=False;self._preview_jobs=[];self.attachment_manager=None;self.conversion_window=None;self.comparison=None;self.notes_visible=True;self.closed=False;self._compare_layout_token=0
         self.workflow_state()
+        self.reading_actions_state()
         header=ttk.Frame(self.frame,padding=(24,14));self.header=header;header.pack(fill='x')
         title=ttk.Frame(header);title.pack(side='left');ttk.Label(title,text='文献阅读',font=(FONT,21,'bold')).pack(anchor='w')
         self.title=tk.StringVar(value='打开 PDF 或 Word，在这里阅读与记录想法');title_label=ttk.Label(title,textvariable=self.title,style='Muted.TLabel',wraplength=520);title_label.pack(anchor='w',pady=(5,0))
@@ -112,6 +114,7 @@ class ReaderPage(ReaderWorkflow):
         ttk.Label(self.frame,textvariable=self.status,style='Muted.TLabel',padding=(24,12)).pack(fill='x')
         self.canvas.create_text(260,200,text='从文献分类或图谱打开文档\n也可点击“打开 PDF / Word”',fill=MUTED,font=(FONT,14),justify='center')
         self.workflow_widgets()
+        self.reading_actions_widgets()
         self.frame.after(100,self.poll)
 
     def toggle_recent_reading(self):
@@ -135,9 +138,10 @@ class ReaderPage(ReaderWorkflow):
         except (ValueError,OSError) as exc:
             self.status.set('无法打开最近阅读的文献：'+str(exc))
 
-    def open(self,rid,record_read=True,attachment_id=None):
+    def open(self,rid,record_read=True,attachment_id=None,anchor=None,resume=True,logical=False):
         if self.busy:raise ValueError('正在收纳或转换文档，请完成后再切换文献。')
         if self.editor_dirty and not messagebox.askyesno('原文尚未保存','放弃本次原文修改并打开文献？',parent=self.frame):return
+        self.save_reading_position(force=True)
         self.editor_dirty=False;self.word_editing=False
         if self.text_view:self.text_panel.pack_forget()
         self.vertical_scroll.pack(side='right',fill='y');self.horizontal_scroll.pack(side='bottom',fill='x');self.canvas.pack(fill='both',expand=True)
@@ -149,9 +153,14 @@ class ReaderPage(ReaderWorkflow):
         lib=Library(self.directory)
         try:
             record=lib.get(rid)
+            if not attachment_id and resume and anchor is None:
+                recent=self.resume_store.for_paper(rid)
+                if recent and any(a['id']==recent['attachment'] and (self.directory/a['path']).is_file() for a in record['attachments']):attachment_id=recent['attachment']
             attachment=next((a for a in record['attachments'] if a['id']==attachment_id),None) if attachment_id else lib.primary_attachment(rid)
             if not attachment:raise ValueError('这篇文献尚未添加正文。请在“正文与附件”中添加 PDF 或 Word，并设为正文。')
-            self.rid=rid;self.attachment_id=attachment['id'];self.source_path=self.directory/attachment['path'];self.path=None;self.page=0;self.count=0;self.generation+=1;self.loading=True;self.fit_pending=True;self.image_size=None
+            target=self.prepare_resume(rid,attachment['id'],anchor,resume,logical)
+            self.rid=rid;self.attachment_id=attachment['id'];self.source_path=self.directory/attachment['path'];self.path=None;self.page=max(0,int(target.get('page') or 0));self.count=0;self.generation+=1;self.loading=True;self.fit_pending=not bool(self._pending_resume_layout);self.image_size=None
+            self._logical_document=self._logical_document or self.source_path.suffix.lower() in ('.txt','.md')
             self._pending_location=None
             self.document_canvas.reset()
             if record_read:
@@ -170,37 +179,45 @@ class ReaderPage(ReaderWorkflow):
         finally:lib.close()
         if getattr(self,'ai_panel',None):self.ai_panel.document_changed()
         self.hide_comparison();self.canvas.delete('all');self.page_label.set('正在打开文档…')
+        self.apply_resume_layout()
         generation=self.generation;source=self.source_path;scale=self.scale;self.status.set('正在准备 Word 阅读预览…' if source.suffix.lower() in ('.doc','.docx') else '正在本地读取 PDF…')
+        requested_page=self.page;logical_document=self._logical_document
+        # Workers own only immutable inputs and the queue, never a Tk page.
+        # A closed reader must be releasable on its creating/main thread even
+        # if local document preparation finishes after the window closes.
+        events=self.events;preview_cache=self.directory/'cache'/'document-previews'
         preview_done=threading.Event()
         if source.suffix.lower() in ('.doc','.docx'):self.register_preview(preview_done)
         def job():
             try:
-                if source.suffix.lower() in ('.txt','.md'):
-                    from reading_documents import read_text_file
-                    text=read_text_file(source);self.events.put(('text-document',generation,(text,parse_references(text))));return
+                if logical_document:
+                    from fulltext_index import logical_paragraphs
+                    paragraphs=logical_paragraphs(source);offsets=[];position=0
+                    for paragraph in paragraphs:offsets.append(position);position+=len(paragraph)+1
+                    text='\n'.join(paragraphs);preview_done.set();events.put(('logical-document',generation,(text,offsets)));return
                 from document_conversion import preview_pdf
-                try:path=preview_pdf(source,self.directory/'cache'/'document-previews')
+                try:path=preview_pdf(source,preview_cache)
                 finally:preview_done.set()
-                count=document_info(path);image,chars=render_page_data(path,0,scale);sizes=page_sizes(path);self.events.put(('prepared',generation,(path,count,0,image,chars,sizes)))
-                text=extract_text(path);refs=parse_references(text);self.events.put(('references',generation,(text,refs)))
+                count=document_info(path);page=min(requested_page,max(0,count-1));image,chars=render_page_data(path,page,scale);sizes=page_sizes(path);events.put(('prepared',generation,(path,count,page,image,chars,sizes)))
+                text=extract_text(path);refs=parse_references(text);events.put(('references',generation,(text,refs)))
                 if source.suffix.lower()=='.pdf':comments=original_pdf_annotations(path)
                 else:
                     from reading_documents import docx_comments,locate_word_comments,word_content
                     comments=locate_word_comments(docx_comments(source),path) if source.suffix.lower()=='.docx' else word_content(source)['comments']
-                self.events.put(('original-comments',generation,comments))
-            except Exception as exc:preview_done.set();self.events.put(('error',generation,str(exc)))
+                events.put(('original-comments',generation,comments))
+            except Exception as exc:preview_done.set();events.put(('error',generation,str(exc)))
         threading.Thread(target=job,daemon=True).start()
 
     def choose_pdf(self):
         if self._import_busy:return
         source=filedialog.askopenfilename(parent=self.frame,filetypes=[('文献文档','*.pdf *.doc *.docx *.txt *.md')])
         if not source:return
-        self._import_busy=True;self.status.set('正在本地收纳文档…')
+        self._import_busy=True;self.status.set('正在本地收纳文档…');directory=self.directory;events=self.events
         def job():
             lib=None
             try:
-                lib=Library(self.directory);rid=lib.import_document(source,lib.projects()[0]['id']);self.events.put(('open',0,rid))
-            except Exception as exc:self.events.put(('import_error',0,str(exc)))
+                lib=Library(directory);rid=lib.import_document(source,lib.projects()[0]['id']);events.put(('open',0,rid))
+            except Exception as exc:events.put(('import_error',0,str(exc)))
             finally:
                 if lib:lib.close()
         threading.Thread(target=job,daemon=True).start()
@@ -231,11 +248,11 @@ class ReaderPage(ReaderWorkflow):
         except (ValueError,StopIteration) as exc:
             self.status.set('附件不可用，请重新打开文献：'+str(exc));return
         finally:lib.close()
-        self.loading=True;generation=self.generation;page=self.page;path=self.path;scale=self.scale;self.status.set('正在打开这一页…')
+        self.loading=True;generation=self.generation;page=self.page;path=self.path;scale=self.scale;count=self.count;events=self.events;self.status.set('正在打开这一页…')
         def job():
             try:
-                image,chars=render_page_data(path,page,scale);self.events.put(('page',generation,(self.count,page,image,chars,page_sizes(path))))
-            except Exception as exc:self.events.put(('error',generation,str(exc)))
+                image,chars=render_page_data(path,page,scale);events.put(('page',generation,(count,page,image,chars,page_sizes(path))))
+            except Exception as exc:events.put(('error',generation,str(exc)))
         threading.Thread(target=job,daemon=True).start()
 
     def poll(self):
@@ -251,7 +268,11 @@ class ReaderPage(ReaderWorkflow):
                     continue
                 if kind=='import_error':self._import_busy=False;self.status.set('导入未完成：'+value);continue
                 if generation!=self.generation:continue
-                if self.workflow_event(kind,value):continue
+                if kind=='logical-document':
+                    text,self._logical_offsets=value;self.workflow_event('text-document',(text,parse_references(text)))
+                    self.text_view.bind('<Control-f>',lambda _:self.search_document());self.text_view.bind('<Control-F>',lambda _:self.search_document())
+                    self.page_label.set('逻辑段落阅读（非真实页码）');self.apply_reading_target();continue
+                if self.workflow_event(kind,value):self.apply_reading_target();continue
                 if kind in ('page','prepared'):
                     if kind=='prepared':self.path=value[0];value=value[1:]
                     from PIL import ImageTk
@@ -261,6 +282,7 @@ class ReaderPage(ReaderWorkflow):
                     self.page_input.set(str(self.page+1))
                     self.page_label.set(f'第 {self.page+1} / {self.count} 页 · {round(self.scale*100)}%');self.status.set(('Word 阅读预览' if self.source_path and self.source_path.suffix.lower() in ('.doc','.docx') else '本地 PDF 阅读')+' · 笔记自动保存')
                     if self.fit_pending:self.fit_pending=False;self.fit_width()
+                    self.apply_reading_target()
                 elif kind=='references':
                     text,self.references=value;lib=Library(self.directory)
                     try:
@@ -283,6 +305,7 @@ class ReaderPage(ReaderWorkflow):
                     else:self.add_annotation(value)
                 elif kind=='error':self.loading=False;self.status.set('阅读未完成：'+value)
         except queue.Empty:pass
+        self.apply_reading_target();self.save_reading_position()
         if self.frame.winfo_exists():self.frame.after(1000 if self.frame.winfo_toplevel().state()=='withdrawn' and not self.loading else 100,self.poll)
 
     def notes_changed(self,_=None):
@@ -412,11 +435,11 @@ class ReaderPage(ReaderWorkflow):
             except (ValueError,OSError) as exc:self.status.set(str(exc))
             finally:self.tool.set('选择文字')
             return
-        path=self.path;generation=self.generation
+        path=self.path;generation=self.generation;events=self.events
         def job():
             try:item['quote']=region_text(path,item['page'],rect)
             except Exception:pass
-            self.events.put(('annotation',generation,item))
+            events.put(('annotation',generation,item))
         threading.Thread(target=job,daemon=True).start()
         self.status.set('正在提取选区文字…')
 
@@ -652,6 +675,7 @@ class ReaderPage(ReaderWorkflow):
         return 'break'
     def close(self):
         if not self.can_close():return False
+        self.close_reading_actions()
         if getattr(self,'ai_panel',None):self.ai_panel.stop();self.ai_panel.closed=True
         if getattr(getattr(self,'ai_panel',None),'embedded',None):self.ai_panel.embedded.close()
         self.save_notes();self.closed=True;self.generation+=1

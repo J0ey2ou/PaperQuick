@@ -2,6 +2,8 @@
 
 **macOS 试用包**：[Apple 芯片与 Intel 下载](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.7.0-macos.1) · [Mac 安装说明与功能边界](docs/macos-preview.md)。按用户要求仅打包，未进行 Mac 功能测试，未 Apple 公证；Windows 正式更新通道不变。
 
+**v3.8.5**：修正工具栏图标居中与间距，统一控件与选中状态；新增奶油暖砂、雾松绿、暮色玫瑰和夜读黑，设置内可实时预览。[本版说明](docs/v3.8.5-upgrade.md)。
+
 **v3.8.4**：新增课题一键打包，默认全选课题及子课题，支持逐篇或逐附件取消勾选、ZIP / 文件夹导出；整理文献分类布局与选择状态。[本版说明](docs/v3.8.4-upgrade.md)。
 
 **v3.8.3**：修复聊天悬浮层遮挡和 PDF 控件误选；内嵌操作收进软件工具栏，六家共享上传与完成检测，并补充可信文件事件后备接入。扩展 2.6.1。[本版说明](docs/v3.8.3-upgrade.md)。
@@ -22,7 +24,7 @@
 
 从导师发来的一个标题，到课题文件夹里的一篇论文，再到阅读笔记和写作引用。Windows 本地文献工作区，连接 **查询 → 下载归档 → 分类与附件 → 阅读比对 → 关系探索 → 阅读回顾 → Word 写作**。
 
-[下载 v3.8.4 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.4/PaperQuick-v3.8.4-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.8.4) · [v3.8.4 升级指南](docs/v3.8.4-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
+[下载 v3.8.5 Windows 版](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.5/PaperQuick-v3.8.5-Windows.zip) · [版本说明](https://github.com/J0ey2ou/PaperQuick/releases/tag/v3.8.5) · [v3.8.5 升级指南](docs/v3.8.5-upgrade.md) · [English](#english) · [参与协作](CONTRIBUTING.md) · [v3.3 微信介绍](docs/微信更新文案-v3.3.md)
 
 **v3.2 新增**：Word 导入与分页预览、Word / PDF 互转、文献附件关联与并排比对、31 套 Word 引用格式，以及主题关键词、检索式、引用与被引探索和新文献追踪。
 
@@ -32,7 +34,7 @@
 
 ## 安装与升级
 
-1. 在 Releases 下载 `PaperQuick-v3.8.4-Windows.zip`，解压完整文件夹到可写目录。
+1. 在 Releases 下载 `PaperQuick-v3.8.5-Windows.zip`，解压完整文件夹到可写目录。
 2. 双击 `文献直达.exe`，保留同目录的 `全局选词助手.exe`、`browser-extension` 和说明文件。
 3. 复制一个英文标题或 DOI，在 **文献查询 → 粘贴并查找** 试用。
 4. 升级时先从托盘 **退出文献直达**，备份原文件夹，再覆盖程序文件。保留 `本地文献库`、`settings.json`、`shortcut.json`，不要用空库替换旧库。备份请在退出后复制完整 `本地文献库`，其中包含文献信息、正文、附件、笔记和阅读记录。
@@ -170,7 +172,7 @@ citeproc-js implements the Citation Style Language · © Frank Bennett. [Citatio
 
 ### Install and update
 
-Download [PaperQuick-v3.8.4-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.4/PaperQuick-v3.8.4-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Existing installations can check for updates in Settings and install after normal exit. For a manual update, exit from the tray, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
+Download [PaperQuick-v3.8.5-Windows.zip](https://github.com/J0ey2ou/PaperQuick/releases/download/v3.8.5/PaperQuick-v3.8.5-Windows.zip), extract the entire folder and run `文献直达.exe` on Windows 10/11 x64. Keep the helper and extension alongside it. Existing installations can check for updates in Settings and install after normal exit. For a manual update, exit from the tray, back up the folder, then replace program files while retaining `本地文献库`, `settings.json` and `shortcut.json`. Back up the whole library while the application is closed.
 
 **Installed Microsoft Word for Windows is required for Word pagination, Word-to-PDF conversion and citation insertion.** PDF-to-Word conversion, PDF reading and DOCX import/storage do not require Word. WPS and Word Online are not supported substitutes for the features that require Word.
 

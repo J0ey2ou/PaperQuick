@@ -24,15 +24,22 @@ class CompactReaderTests(unittest.TestCase):
                     page=tk.StringVar(value='2');status=tk.StringVar(value='2 / 12 · 100%')
                     bar.add_page(page,lambda:None,status)
                     for width in (240,380,700,1100):
-                        bar.place(x=0,y=0,width=width,height=40);root.update_idletasks();bar.arrange(width)
+                        bar.place(x=0,y=0,width=width,height=bar.winfo_reqheight());root.update_idletasks();bar.arrange(width);root.update_idletasks()
                         visible=[x for x in bar.items if x['widget'].winfo_manager()]
                         self.assertTrue(visible)
-                        self.assertTrue(all(int(x['widget'].place_info()['y'])==3 for x in visible))
+                        for item in visible:
+                            button=item['widget']
+                            self.assertEqual(button.winfo_width(),button.winfo_height())
+                            self.assertLessEqual(button.winfo_reqwidth(),button.winfo_width())
+                            self.assertLessEqual(button.winfo_reqheight(),button.winfo_height())
+                            self.assertLessEqual(abs(2*button.winfo_y()+button.winfo_height()-bar.winfo_height()),1)
                         self.assertTrue(all(not x['widget'].cget('text') for x in visible))
                         self.assertEqual(len(visible)+len(bar.hidden),24)
                         if bar.hidden:
                             bar.hidden[-1]['command']();self.assertEqual(calls[-1],23)
-                        self.assertLessEqual(bar.winfo_height(),40)
+                        occupied=[item['widget'] for item in visible]+([bar.more] if bar.hidden else [])
+                        self.assertLessEqual(occupied[-1].winfo_x()+occupied[-1].winfo_width(),bar.page_entry.winfo_x())
+                        self.assertGreaterEqual(bar.page_entry.winfo_height(),bar.page_entry.winfo_reqheight())
                     bar.items[0]['widget'].help.show()
                     self.assertIsNone(bar.items[0]['widget'].help.window)
                     for skin in ui_theme.SKINS:
@@ -56,8 +63,8 @@ class CompactReaderTests(unittest.TestCase):
                     self.assertEqual(len(reader.note_toolbar.items),8)
                     self.assertEqual(len(preview.toolbar.items),7)
                     root.update_idletasks()
-                    self.assertLessEqual(reader.toolbar.winfo_reqheight(),40)
-                    self.assertLessEqual(preview.toolbar.winfo_reqheight(),40)
+                    self.assertEqual(reader.toolbar.winfo_reqheight(),preview.toolbar.winfo_reqheight())
+                    self.assertLessEqual(reader.toolbar.items[0]['widget'].winfo_reqheight(),reader.toolbar.winfo_reqheight())
                     preview.close();reader.close()
                 finally:
                     for job in root.tk.splitlist(root.tk.call('after','info')):root.tk.call('after','cancel',job)

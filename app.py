@@ -448,13 +448,15 @@ class App:
         self.root.after(1000 if self.root.state()=='withdrawn' and not self.busy else 100, self.poll)
 
     def render(self, result):
+        import ui_theme as theme
+        warning_color = theme._tokens(theme.SKINS[theme.CURRENT_SKIN])['warning']
         self.clear_cards()
         count = sum(any(x.kind in ("pdf", "fulltext") for x in p.links) for p in result.papers)
         elapsed = time.monotonic() - self.started_at
         self.status.set(f"找到 {len(result.papers)} 篇文献 / 候选，其中 {count} 篇有开放原文入口 · {elapsed:.1f} 秒" + (" · 正在补充，可直接打开" if not result.complete else ""))
         width = max(500, self.canvas.winfo_width() - 45)
         for index, paper in enumerate(result.papers):
-            frame = tk.Frame(self.cards, bg=PANEL, highlightbackground="#dce4ef", highlightthickness=1, padx=17, pady=14)
+            frame = tk.Frame(self.cards, bg=PANEL, highlightbackground=LINE, highlightthickness=1, padx=17, pady=14)
             frame.pack(fill="x", pady=(0, 10))
             tk.Label(frame, text=f"{index + 1:02d}   {paper.match}", bg=PANEL, fg=BLUE, font=(FONT, 9), anchor="w").pack(fill="x")
             tk.Label(frame, text=paper.title, bg=PANEL, fg=FG, font=(FONT, 12, "bold"), justify="left", wraplength=width, anchor="w").pack(fill="x", pady=(5, 6))
@@ -464,7 +466,7 @@ class App:
             if paper.doi:
                 tk.Label(frame, text="DOI  " + paper.doi, bg=PANEL, fg=MUTED, justify="left", wraplength=width, anchor="w", font=(FONT, 9)).pack(fill="x", pady=(4, 0))
             if not any(x.kind in ("pdf", "fulltext") for x in paper.links):
-                tk.Label(frame, text="正在查找开放版本；出版社入口已可打开。" if not result.complete else "本次未找到开放原文；可从出版社入口通过学校 / 机构权限访问。", bg=PANEL, fg="#e6b980", justify="left", wraplength=width, anchor="w", font=(FONT, 9)).pack(fill="x", pady=(7, 0))
+                tk.Label(frame, text="正在查找开放版本；出版社入口已可打开。" if not result.complete else "本次未找到开放原文；可从出版社入口通过学校 / 机构权限访问。", bg=PANEL, fg=warning_color, justify="left", wraplength=width, anchor="w", font=(FONT, 9)).pack(fill="x", pady=(7, 0))
             ttk.Button(frame, text="收藏 / 下载归档", command=lambda p=paper: self.open_library(p)).pack(anchor="w", pady=(8, 0))
             for link in paper.links[:7]:
                 row = tk.Frame(frame, bg=PANEL)
@@ -533,17 +535,40 @@ class App:
         viewport.bind('<Configure>',lambda e:viewport.itemconfigure(panel_id,width=e.width))
         self.settings_panel=panel
         ttk.Label(panel,text='设置',font=(FONT,21,'bold')).pack(anchor='w',pady=(0,12))
-        from ui_theme import SKINS,GLASS_SKINS,apply_skin
+        from ui_theme import SKINS,SKIN_DESCRIPTIONS,_tokens,apply_skin
         ttk.Label(panel,text='界面皮肤（即时预览）',font=(FONT,12,'bold')).pack(anchor='w')
         skin=tk.StringVar(value=self.skin);skin_combo=ttk.Combobox(panel,textvariable=skin,values=list(SKINS),state='readonly',width=30);skin_combo.pack(anchor='w',pady=(7,6))
         skin_hint=tk.StringVar()
-        ttk.Label(panel,textvariable=skin_hint,style='Muted.TLabel',wraplength=460).pack(anchor='w',pady=(0,18))
+        ttk.Label(panel,textvariable=skin_hint,style='Muted.TLabel',wraplength=520).pack(anchor='w',pady=(0,9))
+        skin_preview=tk.Frame(panel,highlightthickness=1,padx=14,pady=12)
+        skin_preview.pack(fill='x',pady=(0,6))
+        preview_title=tk.Label(skin_preview,text='阅读预览',font=(FONT,11,'bold'),anchor='w')
+        preview_title.pack(anchor='w')
+        preview_body=tk.Label(skin_preview,text='论文、笔记与灵感，清晰呈现。',font=(FONT,10),anchor='w')
+        preview_body.pack(anchor='w',pady=(3,9))
+        preview_swatches=tk.Frame(skin_preview)
+        preview_swatches.pack(anchor='w')
+        swatches=[]
+        for label,key in (('页面','BG'),('卡片','SURFACE'),('强调色','ACCENT')):
+            swatch=tk.Label(preview_swatches,text=label,font=(FONT,9),padx=12,pady=5)
+            swatch.pack(side='left',padx=(0,8))
+            swatches.append((swatch,key))
+        ttk.Label(panel,text='选择后立即应用并自动保存，下次打开继续使用。',style='Muted.TLabel').pack(anchor='w',pady=(0,18))
+        self.settings_skin_preview=skin_preview
+        self.settings_skin_hint=skin_hint
         def describe_skin():
-            skin_hint.set('彩色琉璃质感 · 窗口完全不透明，不透出后方页面；文字和图片保持清晰。' if skin.get() in GLASS_SKINS else '实色界面 · 清晰阅读 · 切换后立即预览，修改自动保存，下次打开继续使用。')
-        def preview(_=None):
+            palette=SKINS[skin.get()];colors=_tokens(palette)
+            skin_hint.set(SKIN_DESCRIPTIONS[skin.get()])
+            skin_preview.configure(bg=palette['PANEL'],highlightbackground=palette['LINE'])
+            preview_title.configure(bg=palette['PANEL'],fg=palette['FG'])
+            preview_body.configure(bg=palette['PANEL'],fg=palette['MUTED'])
+            preview_swatches.configure(bg=palette['PANEL'])
+            for swatch,key in swatches:
+                swatch.configure(bg=palette[key],fg=colors['accent_fg'] if key=='ACCENT' else palette['FG'])
+        def preview(*_):
             self.skin=apply_skin(self.root,skin.get());describe_skin()
         describe_skin()
-        skin_combo.bind('<<ComboboxSelected>>',preview)
+        skin.trace_add('write',preview)
         ttk.Label(panel, text="自定义全局快捷键", font=(FONT, 12, "bold")).pack(anchor="w")
         ttk.Label(panel, text="点击输入框后按下组合键，或手动填写，例如 Ctrl + Alt + J。\n至少两个修饰键（Ctrl / Alt / Shift）+ 字母、数字或 F1–F24。", justify="left").pack(anchor="w", pady=(8, 10))
         shortcut = tk.StringVar(value=load_shortcut(app_dir()))

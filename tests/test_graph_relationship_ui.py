@@ -1,8 +1,8 @@
 from pathlib import Path
 import tempfile
-import time
 import tkinter as tk
 from tkinter import ttk
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch,Mock
 from library_core import Library
@@ -24,10 +24,14 @@ class GraphRelationshipUITests(unittest.TestCase):
                     ui_theme.install_theme(root);page=GraphPage(root,directory)
                     page.data=lib.graph();page.records={r['id']:r for r in lib.records()};page.mode='network'
                     page.canvas.winfo_width=lambda:800;page.canvas.winfo_height=lambda:450
-                    page.draw()
-                    deadline=time.monotonic()+5
-                    while not page.canvas.find_withtag('group') and time.monotonic()<deadline:
-                        root.update();time.sleep(.01)
+                    # This check concerns rendering and editing, so complete the
+                    # real layout task deterministically and consume its queue
+                    # explicitly instead of racing Tk timers against a deadline.
+                    with patch('graph_ui.threading.Thread', side_effect=lambda *, target, daemon: SimpleNamespace(start=target)) as worker:
+                        page.draw()
+                        page.poll()
+                    worker.assert_called_once()
+                    self.assertFalse(page.layout_running)
                     self.assertTrue(page.canvas.find_withtag('group'))
                     callback=Mock();dialog=relationship_editor(root,directory,[one,two],callback);dialog.withdraw()
                     def children(widget):

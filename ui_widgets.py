@@ -19,18 +19,30 @@ def scrollable_page(parent,padding=(0,12)):
 def flow_bar(frame, gap=6):
     """Wrap action buttons rather than allowing pack to clip the last buttons."""
     pending = [None]
+    rows = []
     def arrange():
         pending[0] = None
         if not frame.winfo_exists():return
-        width = max(1, frame.winfo_width()); x = 0; row = 0; column = 0
-        for child in frame.winfo_children():
+        padding = frame.tk.splitlist(frame.cget('padding'))
+        left = frame.winfo_pixels(str(padding[0])) if padding else 0
+        right = frame.winfo_pixels(str(padding[2])) if len(padding) > 2 else left
+        width = max(1, frame.winfo_width() - left - right); x = 0; row = 0; column = 0
+        children = [child for child in frame.winfo_children() if child not in rows]
+        for child in children:
             if child.winfo_manager() == 'pack':child.pack_forget()
-        for child in frame.winfo_children():
+            elif child.winfo_manager() == 'grid':child.grid_forget()
+        for child in children:
             requested = child.winfo_reqwidth() + gap
             if x and x + requested > width:row += 1; column = 0; x = 0
-            if child.winfo_manager() == 'pack':child.pack_forget()
-            child.grid(row=row, column=column, padx=(0,gap), pady=3, sticky='w')
+            if row == len(rows):
+                rows.append(ttk.Frame(frame, style=frame.cget('style') or 'TFrame'))
+            # A separate geometry master keeps each row's column widths local;
+            # widget ownership stays with the original frame and its callers.
+            child.grid(in_=rows[row], row=0, column=column, padx=(0,gap), pady=3, sticky='w')
             x += requested; column += 1
+        for index, container in enumerate(rows):
+            if children and index <= row:container.grid(row=index, column=0, sticky='w')
+            else:container.grid_remove()
     def schedule(_=None):
         if pending[0] is None:pending[0] = frame.after_idle(arrange)
     frame.bind('<Configure>', schedule, add='+');schedule()

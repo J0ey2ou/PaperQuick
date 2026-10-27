@@ -41,6 +41,10 @@ class AttachmentManager:
         for key,label,width in [('name','名称',500),('role','用途',90),('kind','类型',80)]:self.tree.heading(key,text=label);self.tree.column(key,width=width,minwidth=55,stretch=key=='name')
         scroll=ttk.Scrollbar(box,command=self.tree.yview);self.tree.configure(yscrollcommand=scroll.set);scroll.pack(side='right',fill='y');self.tree.pack(fill='both',expand=True)
         self.tree.bind('<Double-1>',lambda _:self.compare())
+        self.context_menu=tk.Menu(self.tree,tearoff=False)
+        for label,command in [('添加文件',self.add_files),('添加网址',self.add_link),('修改名称',self.rename),('设为正文',self.set_primary),('并排阅读与编辑',self.compare),('外部打开',self.external)]:
+            self.context_menu.add_command(label=label,command=command)
+        self.tree.bind('<Button-3>',self.show_context_menu)
         actions=ttk.Frame(panel);actions.pack(fill='x',pady=(14,5))
         for i,(label,command) in enumerate([('添加文件',self.add_files),('添加网址',self.add_link),('修改名称',self.rename),('设为正文',self.set_primary),('并排阅读',self.compare),('外部打开',self.external)]):
             ttk.Button(actions,text=label,command=command).grid(row=i//3,column=i%3,sticky='ew',padx=3,pady=3)
@@ -58,6 +62,15 @@ class AttachmentManager:
 
     def selected(self):
         ids=self.tree.selection();return next((x for x in self.items if ids and x['id']==ids[0]),None)
+
+    def show_context_menu(self,event):
+        row=self.tree.identify_row(event.y)
+        if row:self.tree.selection_set(row)
+        else:self.tree.selection_remove(*self.tree.selection())
+        for index in range(self.context_menu.index('end')+1):
+            self.context_menu.entryconfigure(index,state='disabled' if self.busy or (index>1 and not row) else 'normal')
+        try:self.context_menu.tk_popup(event.x_root,event.y_root)
+        finally:self.context_menu.grab_release()
 
     def run(self,job):
         if self.busy:return
@@ -144,6 +157,65 @@ class AttachmentManager:
     def close(self):
         if self.busy:self.status.set('正在保存附件，完成后即可关闭。');return False
         self.closed=True;self.win.destroy();return True
+
+class AttachmentReader:
+    """Use the same editable reader for supplements, with an independent location."""
+    def __init__(self,parent,owner,on_close):
+        from reader_ui import ReaderPage
+        self.owner=owner;self.frame=ttk.Frame(parent,style='Card.TFrame',padding=8)
+        header=ttk.Frame(self.frame);header.pack(fill='x')
+        ttk.Label(header,text='附件阅读与编辑',font=(FONT,12,'bold')).pack(side='left')
+        ttk.Button(header,text='收起',command=on_close,style='Compact.TButton').pack(side='right')
+        self.choice=tk.StringVar();self.items=[]
+        self.combo=ttk.Combobox(self.frame,textvariable=self.choice,state='readonly');self.combo.pack(fill='x',pady=6)
+        self.combo.bind('<<ComboboxSelected>>',self.choose)
+        self.reader=ReaderPage(self.frame,owner.directory,owner.on_query,owner.on_collect)
+        self.reader.frame.pack(fill='both',expand=True);self.reader.header.pack_forget()
+        for name in ('on_library_changed','on_open_related','on_evidence','task_manager'):
+            if hasattr(owner,name):setattr(self.reader,name,getattr(owner,name))
+        self.reader.note_peers=[owner]
+        owner.note_peers=getattr(owner,'note_peers',[])+[self.reader]
+
+    def __getattr__(self,name):return getattr(self.reader,name)
+
+    @property
+    def fit_pending(self):return self.reader.fit_pending
+
+    @fit_pending.setter
+    def fit_pending(self,value):self.reader.fit_pending=value
+
+    def set_items(self,items,selected=None):
+        self.items=[item for item in items if readable(item)]
+        self.combo.configure(values=[f'{i+1}. {attachment_name(item)}' for i,item in enumerate(self.items)])
+        if self.items:self.combo.current(next((i for i,item in enumerate(self.items) if item['id']==selected),0))
+
+    def choose(self,_=None):
+        index=self.combo.current()
+        if 0<=index<len(self.items):self.open(self.items[index])
+
+    def open(self,item):
+        self.owner.save_notes()
+        self.reader.open(item.get('paper') or self.owner.rid,record_read=False,attachment_id=item['id'],resume=False)
+        if self.reader.notes_visible:self.reader.toggle_notes()
+        self.reader.status.set('附件支持右键笔记、批注、引用、链接和原文编辑；正文与附件独立翻页。')
+
+    def close(self):
+        if self.reader.closed:return True
+        if not self.reader.close():return False
+        self.owner.note_peers=[peer for peer in self.owner.note_peers if peer is not self.reader]
+        self.reader.note_peers=[]
+        self.reader.document_canvas.reset()
+        # Destroying a widget removes its Tcl commands, but not after timers
+        # that still refer to them. Cancel only this reader's callbacks.
+        widgets=[self.frame];commands=set()
+        while widgets:
+            widget=widgets.pop();widgets.extend(widget.winfo_children())
+            commands.update(getattr(widget,'_tclCommands',()) or ())
+        for job in self.frame.tk.splitlist(self.frame.tk.call('after','info')):
+            script=self.frame.tk.call('after','info',job)[0]
+            if self.frame.tk.splitlist(script)[0] in commands:self.frame.tk.call('after','cancel',job)
+        return True
+
 
 class AttachmentPreview:
     """No note/stat mutation: page position belongs only to this comparison pane."""

@@ -236,6 +236,7 @@ class App(WorkspaceAppMixin):
         def read(rid):dismiss();self.open_reader(rid)
         def query(value):dismiss();self.query_reference(value)
         self.summary_view=SummaryView(dialog,self.library_directory,on_read=read,on_query=query,coordinator=self.tracking)
+        self.summary_view.citations.before_remove=self.before_remove_papers
         self.summary_view.frame.pack(fill='both',expand=True);self.summary_view.refresh()
         dialog.protocol('WM_DELETE_WINDOW',dismiss);dialog.bind('<Escape>',lambda _:dismiss())
         apply_skin(self.root,self.skin);dialog.lift();dialog.focus_force()
@@ -276,6 +277,7 @@ class App(WorkspaceAppMixin):
     def before_remove_papers(self,ids):
         if self.reader_page and self.reader_page.rid in ids:
             if not self.reader_page.can_close():return False
+            self.reader_page.hide_comparison()
             self.stop_reading();self.reader_page.save_notes();self.reader_page.rid=None;self.reader_page.generation+=1;self.reader_page.path=None;self.reader_page.count=0;self.reader_page.image_size=None
             self.reader_page.canvas.delete('all');self.reader_page.title.set('文献已移出，可在文献分类中恢复')
             self.reader_page.document_canvas.reset();self.reader_page.loading=False

@@ -44,7 +44,7 @@ class LibraryWindow(SmartViewsMixin):
             value=tk.StringVar(value='0');self.metrics.append(value)
             tk.Label(card,textvariable=value,bg=PANEL,fg=ACCENT,font=('Segoe UI',20,'bold'),anchor='w').pack(side='left',padx=(14,10),pady=8)
             tk.Label(card,text=label,bg=PANEL,fg=MUTED,font=(FONT,10),anchor='w').pack(side='left',padx=(0,12))
-        toolbar=ttk.Frame(self.win,padding=(24,4,24,8));toolbar.pack(fill='x');flow_bar(toolbar)
+        toolbar=ttk.Frame(self.win,padding=(24,4,24,8));self.toolbar=toolbar;toolbar.pack(fill='x');flow_bar(toolbar)
         self.controls=[]
         for title,command in [('导入文档',self.import_pdfs),('导入文件夹',self.import_folder),('新增条目',self.new_record),('离线图谱',self.graph),('Word 引用',self.word)]:
             button=ttk.Button(toolbar,text=title,command=command,style='Accent.TButton' if title=='导入文档' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)

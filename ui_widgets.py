@@ -36,6 +36,9 @@ def flow_bar(frame, gap=6):
             if x and x + requested > width:row += 1; column = 0; x = 0
             if row == len(rows):
                 rows.append(ttk.Frame(frame, style=frame.cget('style') or 'TFrame'))
+                # These row frames are geometry masters, not widget parents.
+                # Keep them below the earlier-created buttons in Tk's stack.
+                rows[-1].lower()
             # A separate geometry master keeps each row's column widths local;
             # widget ownership stays with the original frame and its callers.
             child.grid(in_=rows[row], row=0, column=column, padx=(0,gap), pady=3, sticky='w')

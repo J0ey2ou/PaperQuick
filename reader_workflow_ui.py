@@ -30,6 +30,7 @@ class ReaderWorkflow:
         self.document_canvas=DocumentCanvas(self);self.canvas.configure(yscrollcommand=self.document_canvas.scrolled)
         self.splitter.bind('<ButtonRelease-1>',lambda e:self.frame.after(120,self.fit_width))
         self.reading_menu.add_separator()
+        self.reading_menu.add_command(label='高亮选中文字',command=self.highlight_selection)
         from ai_reading import TEMPLATES
         from ai_reading_ui import AIReadingPanel
         self.ai_panel=AIReadingPanel(self)
@@ -72,6 +73,14 @@ class ReaderWorkflow:
                 data=self.note_images.get(value)
                 if data:images.append(dict(data,index=index,offset=sum(len(p) for p in parts)));parts.append('\ufffc')
         return ''.join(parts),images
+
+    def highlight_selection(self):
+        item=self.current_selection()
+        if not item or not item.get('quote','').strip():self.status.set('请先选中文字，再添加高亮。');return
+        for region in item.get('regions') or [item]:
+            self.add_annotation({'id':uuid.uuid4().hex,'attachment':self.attachment_id,'page':region['page'],
+                'rect':region['rect'],'color':self.colors[self.annotation_color.get()],'kind':'框选高亮',
+                'text':'','quote':item['quote'],'created':time.time()})
 
     def load_note_images(self,record):
         self.note_images={};self.note_photos={}
@@ -412,7 +421,7 @@ class ReaderWorkflow:
             target=destination(lib,link['target'],link['target_page'],link.get('target_point',[.05,.05]),link.get('target_attachment'),link.get('target_quote',''))
         except (ValueError,OSError,KeyError) as exc:self.status.set('无法跳转：'+str(exc));return
         finally:lib.close()
-        self.open(target['target'],attachment_id=target['target_attachment'])
+        self.open(target['target'],attachment_id=target['target_attachment'],editable=False)
         if self.rid!=target['target']:return
         self._pending_location=target
 
@@ -549,21 +558,36 @@ class ReaderWorkflow:
     def show_text(self,text,editable=False):
         self.canvas.pack_forget();self.vertical_scroll.pack_forget();self.horizontal_scroll.pack_forget()
         if not self.text_view:
-            self.text_panel=ttk.Frame(self.viewer);self.text_view=tk.Text(self.text_panel,wrap='word',undo=True,font=(FONT,13),padx=28,pady=24,bg='#f7f8fb',fg='#263343',insertbackground='#245faa',exportselection=False)
+            self.text_panel=ttk.Frame(self.viewer)
+            self.document_edit_bar=ttk.Frame(self.text_panel,padding=(8,5))
+            for label,command in [('保存正文  Ctrl+S',self.save_document),('撤销',lambda:self.undo_document(False)),('重做',lambda:self.undo_document(True)),('分页预览',self.show_paged_view)]:
+                ttk.Button(self.document_edit_bar,text=label,command=command,style='Compact.TButton').pack(side='left',padx=(0,6))
+            from ui_widgets import flow_bar
+            flow_bar(self.document_edit_bar)
+            self.text_view=tk.Text(self.text_panel,wrap='word',undo=True,font=(FONT,13),padx=28,pady=24,bg='#f7f8fb',fg='#263343',insertbackground='#245faa',exportselection=False)
             scroll=ttk.Scrollbar(self.text_panel,command=self.text_view.yview);scroll.pack(side='right',fill='y');self.text_view.configure(yscrollcommand=scroll.set);self.text_view.pack(fill='both',expand=True)
             self.text_view.bind('<Button-3>',self.reading_context);self.text_view.bind('<<Modified>>',self.document_changed)
             self.text_view.bind('<Control-s>',lambda e:self.save_document());self.text_view.bind('<Control-S>',lambda e:self.save_document())
-        self.text_panel.pack(fill='both',expand=True);self.text_view.configure(state='normal');self.text_view.delete('1.0','end');self.text_view.insert('1.0',text.replace('\r','\n').replace('\x07','␇'));self.text_view.edit_reset();self.text_view.edit_modified(False)
+        if editable:self.document_edit_bar.pack(fill='x',before=self.text_view)
+        else:self.document_edit_bar.pack_forget()
+        self.text_panel.pack(fill='both',expand=True);self.text_view.configure(state='normal');self.text_view.delete('1.0','end');self.text_view.insert('1.0',text.replace('\r\n','\n').replace('\r','\n').replace('\x07','␇'));self.text_view.edit_reset();self.text_view.edit_modified(False)
         self.text_view.configure(state='normal' if editable else 'disabled');self.editor_dirty=False;self.word_editing=editable
         self.page=0;self.count=1;self.page_label.set('原文编辑 · Ctrl+S 保存' if editable else 'TXT / Markdown · 连续阅读');self.draw_text_markers()
 
+    def undo_document(self,redo=False):
+        if not self.word_editing or self.document_job:return
+        try:self.text_view.edit_redo() if redo else self.text_view.edit_undo()
+        except tk.TclError:return
+        self.document_changed()
+
     def show_paged_view(self):
+        self.document_changed()
         if self.word_editing and self.editor_dirty:
             if not messagebox.askyesno('尚未保存','放弃本次原文修改并返回分页阅读？',parent=self.frame):return
         self.editor_dirty=False;self.word_editing=False
         if self.text_view:self.text_panel.pack_forget()
         self.vertical_scroll.pack(side='right',fill='y');self.horizontal_scroll.pack(side='bottom',fill='x');self.canvas.pack(fill='both',expand=True)
-        if self.rid:self.open(self.rid,record_read=False)
+        if self.rid:self.open(self.rid,record_read=False,attachment_id=self.attachment_id,resume=False,editable=False)
 
     def document_changed(self,event=None):
         if self.drawing_text_markers:return
@@ -572,7 +596,8 @@ class ReaderWorkflow:
         if self.word_editing:self.editor_dirty=True;self.status.set('正在编辑归档副本 · Ctrl+S 保存；原导入文件会保留。')
 
     def edit_document(self):
-        if not self.source_path or self.document_job:return
+        if not self.source_path or self.document_job or self.loading:return
+        if self.word_editing:return
         suffix=self.source_path.suffix.lower()
         if suffix not in ('.doc','.docx','.txt','.md'):self.status.set('原文编辑支持 Word 与 TXT；PDF 可以选择文字、记笔记和批注。');return
         self.document_job=True;self.status.set('正在打开可编辑原文…');generation=self.generation;source=self.source_path;events=self.events
@@ -584,6 +609,7 @@ class ReaderWorkflow:
         threading.Thread(target=job,daemon=True).start()
 
     def save_document(self):
+        self.document_changed()
         if not self.word_editing or not self.editor_dirty or self.document_job:return 'break'
         source=self.source_path;edited=self.text_view.get('1.0','end-1c');raw=self.editor_raw;sha=self.editor_sha;rid=self.rid;aid=self.attachment_id;generation=self.generation;directory=self.directory;events=self.events
         if source.suffix.lower() in ('.doc','.docx'):edited=edited.replace('␇','\x07')
@@ -615,13 +641,17 @@ class ReaderWorkflow:
             text,refs=value;self.loading=False;self.path=None;self.image_size=None;self.show_text(text);self.references=refs;self.fill_docked_references();self.status.set('本地文本阅读 · 选中文字后右键记录或添加链接')
             if getattr(self,'reference_window',None) and self.reference_window.winfo_exists():self.fill_references()
         elif kind=='editable-document':
-            self.document_job=False;self.editor_raw=value['text'];self.editor_sha=value['sha'];self.show_text(value['text'],True);self.status.set('可以直接修改原文。保存会更新归档副本并保留上一版本。')
+            self.loading=False;self.document_job=False;self.path=None;self.image_size=None
+            self.editor_raw=value['text'];self.editor_sha=value['sha'];self.show_text(value['text'],True)
+            self._logical_document=True;self._logical_offsets=[];offset=0
+            for line in self.text_view.get('1.0','end-1c').splitlines(keepends=True):self._logical_offsets.append(offset);offset+=len(line)
+            self.status.set('在原有正文上直接增删文字 · Ctrl+S 保存 Word · 上一版本保存在 versions 文件夹。')
             if value.get('comments'):self.original_annotations=[dict(a,attachment=self.attachment_id) for a in value['comments']];self.refresh_annotations();self.draw_text_markers()
         elif kind=='document-saved':
             self.document_job=False;self.editor_dirty=False;self.word_editing=False
             if self.text_view:self.text_panel.pack_forget()
             self.vertical_scroll.pack(side='right',fill='y');self.horizontal_scroll.pack(side='bottom',fill='x');self.canvas.pack(fill='both',expand=True)
-            self.open(self.rid,record_read=False);self.status.set('原文已保存，上一版本保存在文献库 versions 文件夹。')
+            self.open(self.rid,record_read=False,attachment_id=self.attachment_id);self.status.set('原文已保存，上一版本保存在文献库 versions 文件夹。')
         elif kind=='document-error':
             self.document_job=False
             if self.text_view and self.word_editing:self.text_view.configure(state='normal')

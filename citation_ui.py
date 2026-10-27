@@ -4,7 +4,7 @@ import queue
 import re
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import webbrowser
 
 from library_core import Library, normalize_doi
@@ -81,6 +81,10 @@ class CitationView:
         self.seed_combo = ttk.Combobox(seeds, textvariable=self.seed, state='readonly')
         self.seed_combo.pack(side='left', fill='x', expand=True)
         self.seed_combo.bind('<<ComboboxSelected>>', lambda _: self._seed_changed())
+        self.remove_seed_button = ttk.Button(seeds, text='删除错误导入', command=self.remove_seed)
+        self.remove_seed_button.pack(side='right', padx=(8, 0))
+        self.restore_button = ttk.Button(seeds, text='恢复最近删除', command=self.restore_removed)
+        self.restore_button.pack(side='right', padx=(8, 0))
 
         actions = ttk.Frame(self.frame)
         actions.pack(fill='x', pady=(9, 14))
@@ -114,6 +118,11 @@ class CitationView:
         self.tree.pack(fill='both', expand=True)
         self.tree.bind('<<TreeviewSelect>>', self._detail)
         self.tree.bind('<Double-1>', lambda _: self.query_selected())
+        self.result_menu = tk.Menu(self.tree, tearoff=False)
+        self.result_menu.add_command(label='查找原文', command=self.query_selected)
+        self.result_menu.add_command(label='收藏文献', command=self.collect_selected)
+        self.result_menu.add_command(label='移除这条错误结果', command=self.remove_result)
+        self.tree.bind('<Button-3>', self.result_context)
         detail_frame = ttk.Frame(body, padding=(0, 10, 0, 0))
         body.add(detail_frame, weight=2)
         self.detail = tk.Text(detail_frame, height=2, wrap='word', bg=theme.PANEL, fg=theme.FG,
@@ -181,6 +190,7 @@ class CitationView:
         selected = next((label for label, rid in self.seed_rows.items() if rid == selected_id), None)
         self.seed.set(selected or next(iter(self.seed_rows), ''))
         self.find_button.configure(state='normal' if self.seed_rows and not self.busy else 'disabled')
+        self.remove_seed_button.configure(state='normal' if self.seed_rows and not self.busy else 'disabled')
         self._seed_changed()
 
     def _seed_record(self):
@@ -197,6 +207,8 @@ class CitationView:
 
     def _set_busy(self, busy):
         self.busy = busy
+        self.remove_seed_button.configure(state='disabled' if busy or not self.seed_rows else 'normal')
+        self.restore_button.configure(state='disabled' if busy else 'normal')
         self.find_button.configure(state='disabled' if busy or not self.seed_rows else 'normal')
         self.project_combo.configure(state='disabled' if busy else 'readonly')
         self.seed_combo.configure(state='disabled' if busy else 'readonly')
@@ -355,6 +367,41 @@ class CitationView:
         self.status.set(f'已收藏到「{name}」。可以继续查找原文，再下载归档。')
         if self.on_collected:
             self.on_collected()
+
+    def result_context(self, event):
+        row = self.tree.identify_row(event.y)
+        if not row or self.busy:return
+        self.tree.selection_set(row);self._detail()
+        try:self.result_menu.tk_popup(event.x_root, event.y_root)
+        finally:self.result_menu.grab_release()
+
+    def remove_result(self):
+        item = self._selected()
+        if self.busy or item is None:return
+        self.items.remove(item);self._render_results()
+        self.status.set('已从本次结果中移除这条文献。')
+
+    def remove_seed(self):
+        record = self._seed_record()
+        if self.busy or not record:return
+        if not messagebox.askyesno('删除错误导入', '将《'+record['title']+'》移出文献库？原文件保留，可通过“恢复最近删除”找回。', parent=self.frame):return
+        before = getattr(self, 'before_remove', None)
+        if before and before([record['id']]) is False:
+            self.status.set('请先完成正文或附件中的保存，再删除文献。');return
+        lib = Library(self.directory)
+        try:lib.remove_papers([record['id']])
+        finally:lib.close()
+        self.refresh();self.status.set('错误导入已删除，可恢复最近删除。')
+        if self.on_collected:self.on_collected()
+
+    def restore_removed(self):
+        if self.busy:return
+        lib = Library(self.directory)
+        try:lib.restore_removed()
+        except ValueError as exc:self.status.set(str(exc));return
+        finally:lib.close()
+        self.refresh();self.status.set('已恢复最近删除的文献。')
+        if self.on_collected:self.on_collected()
 
     def _destroyed(self, event):
         if event.widget == self.frame:

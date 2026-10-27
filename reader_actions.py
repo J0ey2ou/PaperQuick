@@ -74,9 +74,6 @@ class ReaderActions:
                 if index:self.notes.see(index)
 
     def show_paged_view(self):
-        if self._logical_document and self.source_path and self.source_path.suffix.lower() == '.docx':
-            self.open(self.rid, record_read=False, attachment_id=self.attachment_id, resume=False, logical=False)
-            return
         return super().show_paged_view()
 
     def prepare_resume(self, rid, attachment, anchor=None, resume=True, logical=False):

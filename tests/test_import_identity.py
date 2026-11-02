@@ -39,6 +39,11 @@ class ImportIdentityTests(unittest.TestCase):
         self.assertEqual(extract_document_doi('','doi:10.1136/bmjopen-2012-\nABSTRACT'), '')
         self.assertEqual(extract_document_doi('','http://dx.doi.org/10.1136/\nbmjopen-2012-002007).'),'10.1136/bmjopen-2012-002007')
 
+    def test_body_citations_and_ambiguous_identifiers_are_not_document_identity(self):
+        self.assertEqual(extract_document_doi('', 'Article title\nIntroduction\nPrior work doi:10.1234/other'), '')
+        self.assertEqual(extract_document_doi('', 'Article title\ndoi:10.1234/one\ndoi:10.1234/two'), '')
+        self.assertEqual(extract_document_doi('10.1234/own', 'Introduction\ndoi:10.1234/other'), '10.1234/own')
+
     def test_legacy_false_merge_is_recovered_with_notes_and_original_files_kept(self):
         rid=self.lib.import_pdf(self.a);primary=self.lib.primary_attachment(rid)
         self.lib.add_attachment(rid,self.b);bad=next(a for a in self.lib.get(rid)['attachments'] if a['id']!=primary['id'])

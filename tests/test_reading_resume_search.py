@@ -43,7 +43,7 @@ class ReadingResumeTests(unittest.TestCase):
             reader.poll()
         self.root.update_idletasks()
 
-    def test_restores_last_attachment_page_scale_and_layout_but_explicit_anchor_wins(self):
+    def test_paper_opens_primary_and_explicit_attachment_restores_its_own_position(self):
         first, second = self.base / 'primary.pdf', self.base / 'supplement.pdf'
         make_pdf(first, ['Primary'] * 2);make_pdf(second, ['Supplement'] * 5)
         rid = self.lib.save({'title': 'Resume fixture'})
@@ -51,8 +51,16 @@ class ReadingResumeTests(unittest.TestCase):
         attachment = self.lib.get(rid)['attachments'][1]
         store = ReadingResumeStore(self.lib.root)
         store.save(rid, attachment['id'], page=3, fraction=.25, scale=1.8, continuous=True, notes_visible=False, split=.65)
+        primary = self.lib.primary_attachment(rid)
+        store.save(rid, primary['id'], page=1, fraction=.1, scale=1.4)
+        store.save(rid, attachment['id'], page=3, fraction=.25, scale=1.8, continuous=True, notes_visible=False, split=.65)
         reader = self.build_reader()
         self.open_now(reader, rid)
+        self.assertEqual(reader.attachment_id, primary['id'])
+        self.assertEqual(reader.path, self.lib.root / primary['path'])
+        self.assertEqual(reader.page, 1)
+        self.assertAlmostEqual(reader.scale, 1.4)
+        self.open_now(reader, rid, attachment_id=attachment['id'])
         self.assertEqual(reader.attachment_id, attachment['id'])
         self.assertEqual(reader.page, 3)
         self.assertAlmostEqual(reader.scale, 1.8)
@@ -61,6 +69,11 @@ class ReadingResumeTests(unittest.TestCase):
         self.assertEqual(store.last()['attachment'], attachment['id'])
         self.assertEqual(store.last()['page'], 3)
         self.open_now(reader, rid, attachment_id=attachment['id'], anchor={'page': 1, 'fraction': 0})
+        self.assertEqual(reader.page, 1)
+        # Clicking the paper again must leave the attachment even though it was
+        # just saved as the most recently read file.
+        self.open_now(reader, rid)
+        self.assertEqual(reader.attachment_id, primary['id'])
         self.assertEqual(reader.page, 1)
         self.assertEqual(self.root.state(), 'withdrawn')
 

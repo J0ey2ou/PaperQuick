@@ -87,6 +87,7 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
         self.notes.tag_configure('bold',font=(FONT,11,'bold'));self.notes.tag_configure('italic',font=(FONT,11,'italic'))
         self.notes.bind('<Control-s>',lambda _:self.save_key());self.notes.bind('<Control-S>',lambda _:self.save_key())
         self.notes.bind('<Button-1>',lambda _:self.notes.focus_set(),add='+')
+        self.notes.bind('<FocusIn>',lambda _:self.prepare_note_edit(),add='+')
         menu=tk.Menu(self.notes,tearoff=False)
         for label,event in [('撤销','<<Undo>>'),('重做','<<Redo>>'),('剪切','<<Cut>>'),('复制','<<Copy>>'),('粘贴','<<Paste>>'),('全选','<<SelectAll>>')]:menu.add_command(label=label,command=lambda e=event:self.notes.event_generate(e))
         menu.add_separator();menu.add_command(label='插入图片',command=self.insert_note_image);menu.add_command(label='粘贴截图 / 图片',command=self.paste_note_image)
@@ -114,6 +115,9 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
         ttk.Label(self.frame,textvariable=self.status,style='Muted.TLabel',padding=(24,12)).pack(fill='x')
         self.canvas.create_text(260,200,text='从文献分类或图谱打开文档\n也可点击“打开 PDF / Word”',fill=MUTED,font=(FONT,14),justify='center')
         self.workflow_widgets()
+        from reader_navigation import ReaderNavigation
+        self.navigation=ReaderNavigation(self)
+        self.reading_menu.add_command(label="翻译选中文字…",command=self.navigation.select_translation)
         self.reading_actions_widgets()
         self.frame.after(100,self.poll)
 
@@ -138,8 +142,18 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
         except (ValueError,OSError) as exc:
             self.status.set('无法打开最近阅读的文献：'+str(exc))
 
-    def open(self,rid,record_read=True,attachment_id=None,anchor=None,resume=True,logical=False):
+    def refresh_document_title(self, record):
+        title=display_name(record)
+        attachment=next((a for a in record['attachments'] if a['id']==self.attachment_id),None)
+        if attachment and attachment.get('role')!='primary':
+            from attachment_ui import attachment_name
+            title+=' · 附件：'+attachment_name(attachment)
+        self.title.set(title)
+
+    def open(self,rid,record_read=True,attachment_id=None,anchor=None,resume=True,logical=False,editable=None):
+        self.document_changed()
         if self.busy:raise ValueError('正在收纳或转换文档，请完成后再切换文献。')
+        if self.comparison and not self.comparison.can_close():raise ValueError('请先保存附件中的原文修改，再切换文献。')
         if self.editor_dirty and not messagebox.askyesno('原文尚未保存','放弃本次原文修改并打开文献？',parent=self.frame):return
         self.save_reading_position(force=True)
         self.editor_dirty=False;self.word_editing=False
@@ -153,9 +167,8 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
         lib=Library(self.directory)
         try:
             record=lib.get(rid)
-            if not attachment_id and resume and anchor is None:
-                recent=self.resume_store.for_paper(rid)
-                if recent and any(a['id']==recent['attachment'] and (self.directory/a['path']).is_file() for a in record['attachments']):attachment_id=recent['attachment']
+            # A paper route always opens its primary. Resume only the position
+            # within that file; an attachment must be requested explicitly.
             attachment=next((a for a in record['attachments'] if a['id']==attachment_id),None) if attachment_id else lib.primary_attachment(rid)
             if not attachment:raise ValueError('这篇文献尚未添加正文。请在“正文与附件”中添加 PDF 或 Word，并设为正文。')
             target=self.prepare_resume(rid,attachment['id'],anchor,resume,logical)
@@ -167,21 +180,19 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
                 changes={'read_count':record.get('read_count',0)+1,'last_read':time.time()}
                 if record.get('status') in ('未读','待读'):changes['status']='在读'
                 lib.save(changes,rid=rid)
-            self.title.set(display_name(record));self.notes.configure(state='normal');self.notes.delete('1.0','end');self.notes.insert('1.0',record.get('notes',''));self.notes.edit_reset();self.notes.edit_modified(False);self.dirty=False
-            self.load_note_images(record)
-            for tag,ranges in record.get('note_styles',{}).items():
-                if tag in ('bold','italic'):
-                    for start,end in ranges:
-                        try:self.notes.tag_add(tag,start,end)
-                        except tk.TclError:pass
+            self.refresh_document_title(record);self.load_notes(record)
             self.annotations=record.get('annotations',[]);self._annotation_ids={a['id'] for a in self.annotations};self.original_annotations=[];self.last_selection=None;self.refresh_annotations()
             self.references=record.get('references',[]);self.note_status.set('笔记会自动保存')
         finally:lib.close()
         if getattr(self,'ai_panel',None):self.ai_panel.document_changed()
+        if getattr(self,'navigation',None):self.navigation.open()
         self.hide_comparison();self.canvas.delete('all');self.page_label.set('正在打开文档…')
         self.apply_resume_layout()
         generation=self.generation;source=self.source_path;scale=self.scale;self.status.set('正在准备 Word 阅读预览…' if source.suffix.lower() in ('.doc','.docx') else '正在本地读取 PDF…')
         requested_page=self.page;logical_document=self._logical_document
+        if editable is not True and not logical and anchor is None and source.suffix.lower() in ('.doc','.docx'):
+            self._logical_document=False;logical_document=False
+        edit_word=source.suffix.lower() in ('.doc','.docx') and editable is True and not logical and anchor is None
         # Workers own only immutable inputs and the queue, never a Tk page.
         # A closed reader must be releasable on its creating/main thread even
         # if local document preparation finishes after the window closes.
@@ -190,6 +201,15 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
         if source.suffix.lower() in ('.doc','.docx'):self.register_preview(preview_done)
         def job():
             try:
+                if edit_word:
+                    from reading_documents import word_content
+                    from library_core import digest
+                    try:
+                        original_sha=digest(source);data=word_content(source)
+                        if digest(source)!=original_sha:raise ValueError('文档在打开时已发生变化，请重新打开后编辑。')
+                        data['sha']=original_sha;events.put(('editable-document',generation,data))
+                    finally:preview_done.set()
+                    return
                 if logical_document:
                     from fulltext_index import logical_paragraphs
                     paragraphs=logical_paragraphs(source);offsets=[];position=0
@@ -200,6 +220,10 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
                 finally:preview_done.set()
                 count=document_info(path);page=min(requested_page,max(0,count-1));image,chars=render_page_data(path,page,scale);sizes=page_sizes(path);events.put(('prepared',generation,(path,count,page,image,chars,sizes)))
                 text=extract_text(path);refs=parse_references(text);events.put(('references',generation,(text,refs)))
+                try:
+                    from reader_navigation import pdf_outline
+                    events.put(('outline',generation,pdf_outline(path)))
+                except Exception:events.put(('outline',generation,[]))
                 if source.suffix.lower()=='.pdf':comments=original_pdf_annotations(path)
                 else:
                     from reading_documents import docx_comments,locate_word_comments,word_content
@@ -270,9 +294,15 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
                 if generation!=self.generation:continue
                 if kind=='logical-document':
                     text,self._logical_offsets=value;self.workflow_event('text-document',(text,parse_references(text)))
+                    from reader_navigation import text_headings
+                    self.navigation.outline=text_headings(text);self.navigation.fill_outline()
                     self.text_view.bind('<Control-f>',lambda _:self.search_document());self.text_view.bind('<Control-F>',lambda _:self.search_document())
                     self.page_label.set('逻辑段落阅读（非真实页码）');self.apply_reading_target();continue
-                if self.workflow_event(kind,value):self.apply_reading_target();continue
+                if self.workflow_event(kind,value):
+                    if kind=='editable-document':
+                        from reader_navigation import text_headings
+                        self.navigation.outline=text_headings(value['text']);self.navigation.fill_outline()
+                    self.apply_reading_target();continue
                 if kind in ('page','prepared'):
                     if kind=='prepared':self.path=value[0];value=value[1:]
                     from PIL import ImageTk
@@ -283,13 +313,18 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
                     self.page_label.set(f'第 {self.page+1} / {self.count} 页 · {round(self.scale*100)}%');self.status.set(('Word 阅读预览' if self.source_path and self.source_path.suffix.lower() in ('.doc','.docx') else '本地 PDF 阅读')+' · 笔记自动保存')
                     if self.fit_pending:self.fit_pending=False;self.fit_width()
                     self.apply_reading_target()
+                elif kind=='outline':
+                    self.navigation.outline=value;self.navigation.fill_outline()
                 elif kind=='references':
                     text,self.references=value;lib=Library(self.directory)
                     try:
                         primary=lib.primary_attachment(self.rid)
-                        if not primary or primary['id']!=self.attachment_id:
-                            self.status.set('正文已更新，请重新打开文献阅读。');continue
-                        lib.save({'text':text,'references':self.references},rid=self.rid)
+                        if primary and primary['id']==self.attachment_id:
+                            # Import already records the primary text and references.
+                            # Opening a preview must not overwrite later corrections.
+                            record=lib.get(self.rid)
+                            missing={key:value for key,value in (('text',text),('references',self.references)) if key not in record}
+                            if missing:lib.save(missing,rid=self.rid)
                     finally:lib.close()
                     self.status.set(f'已在本地提取 {len(self.references)} 条参考文献；标题提取结果需要核对。')
                     if getattr(self,'reference_window',None) and self.reference_window.winfo_exists():self.fill_references()
@@ -316,6 +351,20 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
         if self.note_job:self.frame.after_cancel(self.note_job)
         self.note_job=self.frame.after(1200,self.save_notes)
 
+    def load_notes(self,record):
+        self.notes.configure(state='normal');self.notes.delete('1.0','end');self.notes.insert('1.0',record.get('notes',''));self.notes.edit_reset()
+        self.load_note_images(record)
+        for tag in ('bold','italic'):
+            self.notes.tag_remove(tag,'1.0','end')
+            for start,end in record.get('note_styles',{}).get(tag,[]):
+                try:self.notes.tag_add(tag,start,end)
+                except tk.TclError:pass
+        self.notes.edit_modified(False);self.dirty=False
+
+    def prepare_note_edit(self):
+        for peer in getattr(self,'note_peers',()):
+            if not peer.closed and peer.rid==self.rid:peer.save_notes()
+
     def save_notes(self):
         if self.note_job:
             try:self.frame.after_cancel(self.note_job)
@@ -325,15 +374,21 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
         lib=None
         try:
             styles={tag:list(zip(*[iter(map(str,self.notes.tag_ranges(tag)))]*2)) for tag in ('bold','italic')}
-            text,images=self.note_snapshot();lib=Library(self.directory);lib.save({'notes':text,'note_styles':styles,'note_images':images},rid=self.rid);self.dirty=False;self.note_status.set('已自动保存到本机')
+            text,images=self.note_snapshot();lib=Library(self.directory);lib.save({'notes':text,'note_styles':styles,'note_images':images},rid=self.rid);self.dirty=False;self.notes.edit_modified(False);self.note_status.set('已自动保存到本机')
         except Exception as exc:self.note_status.set('保存失败：'+str(exc));raise
         finally:
             if lib:lib.close()
+        for peer in getattr(self,'note_peers',()):
+            if not peer.closed and peer.rid==self.rid and not (peer.dirty or peer.notes.edit_modified()):
+                lib=Library(self.directory)
+                try:peer.load_notes(lib.get(self.rid))
+                finally:lib.close()
 
     def save_key(self):self.save_notes();return 'break'
 
     def reading_context(self,event):
         if not self.rid or not self.context_location(event):return
+        self.prepare_note_edit()
         self.cancel_box_selection()
         try:self.reading_menu.tk_popup(event.x_root,event.y_root)
         finally:self.reading_menu.grab_release()
@@ -361,6 +416,7 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
 
     def new_paragraph(self):
         if not self.rid:self.status.set('先打开一篇 PDF，再记录笔记。');return
+        self.prepare_note_edit()
         self.show_notes()
         self.notebook.select(self.note_tab);self.notes.configure(state='normal');self.notes.insert('end','\n\n' if self.notes.get('1.0','end-1c') else '');self.notes.mark_set('insert','end-1c');self.notes.see('insert');self.notes.focus_set()
 
@@ -576,9 +632,11 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
 
     @property
     def busy(self):
-        return self._import_busy or self.document_job or any(window and not window.closed and window.busy for window in (self.attachment_manager,self.conversion_window,getattr(self,'word_citations',None),*self.lookup_windows))
+        return self._import_busy or self.document_job or any(window and not window.closed and window.busy for window in (self.attachment_manager,self.conversion_window,getattr(self,'word_citations',None),self.comparison,*self.lookup_windows))
 
     def can_close(self):
+        self.document_changed()
+        if self.comparison and not self.comparison.can_close():return False
         if self.editor_dirty:self.status.set('原文修改尚未保存，请先按 Ctrl+S 保存。');return False
         if self.busy:self.status.set('正在收纳或转换文档，完成后即可关闭。');return False
         if any(not job.is_set() for job in self._preview_jobs):self.status.set('正在准备 Word 预览，完成后即可关闭。');return False
@@ -605,14 +663,15 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
 
     def compare_attachment(self,attachment):
         if not self.rid:return
-        from attachment_ui import AttachmentPreview,readable
+        from attachment_ui import AttachmentReader,readable
         if not readable(attachment):self.status.set('这个附件暂不支持页内预览，请从附件列表选择“外部打开”。');return
         lib=Library(self.directory)
         try:items=lib.get(self.rid)['attachments']
         finally:lib.close()
         if not any(a['id']==attachment['id'] for a in items):self.status.set('这个附件不属于当前文献。请重新选择。');return
         if self.notes_visible:self.splitter.forget(self.notes_panel);self.notes_visible=False
-        if not self.comparison:self.comparison=AttachmentPreview(self.splitter,self.directory,self.hide_comparison,on_preview_start=self.register_preview)
+        self.save_notes()
+        if not self.comparison:self.comparison=AttachmentReader(self.splitter,self,self.hide_comparison)
         if str(self.comparison.frame) not in self.splitter.panes():self.splitter.add(self.comparison.frame,weight=4)
         self.comparison.set_items(items,attachment['id']);self.comparison.open(attachment)
         self._compare_layout_token+=1;layout_token=self._compare_layout_token
@@ -643,10 +702,11 @@ class ReaderPage(ReaderActions,ReaderWorkflow):
         else:self.attachment_panel();self.status.set('先添加一份 PDF 或 Word 附件，就能与正文并排比对。')
 
     def hide_comparison(self):
+        if self.comparison and not self.comparison.close():return False
         self._compare_layout_token+=1
         if self.comparison:
             if str(self.comparison.frame) in self.splitter.panes():self.splitter.forget(self.comparison.frame)
-            self.comparison.close();self.comparison=None
+            self.comparison.frame.destroy();self.comparison=None
         self.show_notes()
 
     def show_notes(self):

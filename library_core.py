@@ -125,8 +125,19 @@ def document_metadata(path):
         raise ValueError('无法读取 Word 文档，请检查文件是否完整，或在 Word 中另存为 DOCX。') from exc
     namespace = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
     # Only w:t is visible body text; relationship URLs, formatting and field codes are not prose.
-    paragraphs = [''.join(t.text or '' for t in p.iter(namespace + 't')).strip()
-                  for p in document.iter(namespace + 'p')]
+    def paragraph_text(paragraph):
+        def visible(node):
+            if node.tag in (namespace + 'del', namespace + 'moveFrom'):
+                return ''
+            if node.tag == namespace + 't':
+                return node.text or ''
+            if node.tag == namespace + 'tab':
+                return '\t'
+            if node.tag in (namespace + 'br', namespace + 'cr'):
+                return '\n'
+            return ''.join(visible(child) for child in node if child.tag != namespace + 'p')
+        return visible(paragraph).strip()
+    paragraphs = [paragraph_text(p) for p in document.iter(namespace + 'p')]
     text = '\n'.join(p for p in paragraphs if p)[:500000]
     props = {child.tag.rsplit('}', 1)[-1]: (child.text or '').strip() for child in core} if core is not None else {}
     title = props.get('title') or next((p for p in paragraphs[:5] if 8 <= len(p) <= 300), '') or path.stem
@@ -458,6 +469,8 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
                 with source.open('rb') as input_file, dest.open('xb') as output:
                     created = True
                     shutil.copyfileobj(input_file, output)
+                if digest(dest) != attachment['sha']:
+                    raise ValueError('恢复期间原文件发生变化，请保存文件后重新导入。')
                 break
             except FileExistsError:
                 index += 1
@@ -481,7 +494,7 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
         role = 'supplement' if primary and (self.root / primary['path']).is_file() else 'primary'
         return self._add_attachment(rid, source, '', role, extract=extract)
 
-    def _add_attachment(self, rid, source, label, role, extract=False):
+    def _add_attachment(self, rid, source, label, role, extract=False, expected_sha=None):
         if role not in ('primary', 'supplement', 'note'):
             raise ValueError('附件类型必须为正文或补充附件。')
         record = self.get(rid)
@@ -501,6 +514,8 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
         elif kind in ('docx', 'doc', 'txt', 'md'):
             metadata = document_metadata(source)
         sha = digest(source)
+        if expected_sha is not None and sha != expected_sha:
+            raise ValueError('导入期间原文件发生变化，请保存文件后重新导入。')
         existing = self.db.execute('SELECT * FROM attachments WHERE paper=? AND sha=?', (rid, sha)).fetchone()
         if existing:
             restored = self._restore_attachment(dict(existing), source)
@@ -516,6 +531,7 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
         # Exclusive creation prevents accidental overwrite even for concurrent imports.
         index = 1
         while True:
+            created = False
             try:
                 dest = target if index == 1 else target.with_stem(target.stem + f' ({index})')
                 # Missing files still reserve their attachment path so a new version
@@ -524,14 +540,17 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
                                    (str(dest.relative_to(self.root)),)).fetchone():
                     index += 1
                     continue
-                with dest.open('xb') as output, source.open('rb') as input_file:
+                with source.open('rb') as input_file, dest.open('xb') as output:
+                    created = True
                     shutil.copyfileobj(input_file, output)
+                if digest(dest) != sha:
+                    raise ValueError('复制期间原文件发生变化，请保存文件后重新导入。')
                 break
             except FileExistsError:
                 index += 1
             except Exception:
-                if 'dest' in locals() and dest.exists():
-                    dest.unlink()
+                if created:
+                    dest.unlink(missing_ok=True)
                 raise
         try:
             with self.db:
@@ -539,57 +558,106 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
                     self.db.execute("UPDATE attachments SET role='supplement' WHERE paper=? AND role='primary'", (rid,))
                 self.db.execute('INSERT INTO attachments(id,paper,path,sha,original,label,role,kind,url) VALUES(?,?,?,?,?,?,?,?,?)',
                                 (aid, rid, str(dest.relative_to(self.root)), sha, str(source), attachment['label'], role, kind, ''))
+                if role == 'primary' and metadata:
+                    data = json.loads(self.db.execute('SELECT data FROM papers WHERE id=?', (rid,)).fetchone()[0])
+                    data.update(text=metadata.get('text', ''), references=metadata.get('references', []))
+                    self.db.execute('UPDATE papers SET data=?,updated=? WHERE id=?', (json.dumps(data, ensure_ascii=False), time.time(), rid))
                 self.log('attach', {'paper': rid, 'source': str(source), 'path': str(dest)})
         except Exception:
             dest.unlink()
             raise
-        if metadata.get('text') and role == 'primary':
-            self.save({'text': metadata['text'], 'references': metadata.get('references', [])}, rid=rid)
         return dest
 
     def import_pdf(self, source, project=None):
-        project = project or self.projects()[0]['id']
-        sha = digest(source)
-        old = self.db.execute('SELECT * FROM attachments WHERE sha=? ORDER BY rowid', (sha,)).fetchone()
-        if old:
-            if getattr(self,'_import_observer',None):self._import_observer(old['paper'])
-            self._restore_attachment(dict(old), source)
-            recovered=self.recover_import_identity(dict(old),source)
-            if recovered:
-                self.assign(recovered,project);return recovered
-            self.assign(old['paper'], project)
-            return old['paper']
-        metadata = pdf_metadata(source)
-        self._preserve_primary_text(metadata)
-        rid = self.save(metadata, project)
-        self.attach(rid, source, extract=False)
+        if Path(source).suffix.lower() != '.pdf':
+            raise ValueError('请选择 PDF 文件。')
+        return self.import_document(source, project)
+
+    def _import_doi_match(self, metadata):
+        """A DOI can only select one record, and cannot contradict its main file."""
+        doi = normalize_doi(metadata.get('doi', ''))
+        if not complete_doi(doi):return None
+        rows = self.db.execute("SELECT id FROM papers WHERE json_extract(data,'$.doi')=?", (doi,)).fetchall()
+        if len(rows) != 1:return None
+        rid = rows[0]['id']
+        primary = self.primary_attachment(rid)
+        if primary:
+            path = self._managed_path(primary['path'])
+            if path.is_file():
+                try:
+                    actual = document_metadata(path).get('doi', '')
+                except (ValueError, OSError):
+                    return None
+                if complete_doi(actual) and normalize_doi(actual) != doi:return None
+        return rid
+
+    def _finish_import(self, rid, attachment):
+        self._last_import_result = {'id': rid, 'attachment_id': attachment['id'],
+                                    'path': attachment['path'], 'title': self.get(rid)['title']}
         return rid
 
     def import_document(self, source, project=None):
         source = Path(source).resolve()
-        if source.suffix.lower() == '.pdf':
-            return self.import_pdf(source, project)
-        metadata = document_metadata(source)
+        self._last_import_result = None
+        if source.suffix.lower() not in ('.pdf', '.doc', '.docx', '.txt', '.md'):
+            raise ValueError('请选择 PDF、Word 或 TXT 文档。')
         project = project or self.projects()[0]['id']
+        self.project(project)
         sha = digest(source)
-        old = self.db.execute('SELECT * FROM attachments WHERE sha=? ORDER BY rowid', (sha,)).fetchone()
+        matches = [dict(row) for row in self.db.execute(
+            "SELECT a.* FROM attachments a JOIN papers p ON p.id=a.paper WHERE a.sha=? "
+            "ORDER BY CASE WHEN EXISTS(SELECT 1 FROM memberships m WHERE m.paper=a.paper AND m.project=?) THEN 0 ELSE 1 END,a.rowid",
+            (sha, project))]
+        # A file attached to another paper is not that paper's identity. Prefer
+        # its independent primary record, regardless of attachment insertion order.
+        old = next((a for a in matches if a['role'] == 'primary' and attachment_kind(a) == source.suffix.lower()[1:]), None)
         if old:
-            if getattr(self,'_import_observer',None):self._import_observer(old['paper'])
-            self._restore_attachment(dict(old), source)
+            if getattr(self, '_import_observer', None):self._import_observer(old['paper'])
+            self._restore_attachment(old, source)
             self.assign(old['paper'], project)
-            return old['paper']
-        self._preserve_primary_text(metadata)
-        rid = self.save(metadata, project)
-        self.add_attachment(rid, source, role='supplement' if self.primary_attachment(rid) else 'primary')
-        return rid
-
-    def _preserve_primary_text(self, metadata):
-        if complete_doi(metadata.get('doi')):
-            row=self.db.execute("SELECT id FROM papers WHERE json_extract(data,'$.doi')=? LIMIT 1",(normalize_doi(metadata['doi']),)).fetchone()
-            old=self.get(row[0]) if row else None
-            if old and self.primary_attachment(old['id']):
-                metadata.pop('text', None)
-                metadata.pop('references', None)
+            actual = next(a for a in self.get(old['paper'])['attachments'] if a['id'] == old['id'])
+            return self._finish_import(old['paper'], actual)
+        if source.suffix.lower() == '.pdf':
+            for attachment in matches:
+                if getattr(self, '_import_observer', None):self._import_observer(attachment['paper'])
+                recovered = self.recover_import_identity(attachment, source)
+                if recovered:
+                    self.assign(recovered, project)
+                    return self._finish_import(recovered, self.primary_attachment(recovered))
+        metadata = document_metadata(source)
+        if digest(source) != sha:
+            raise ValueError('导入期间原文件发生变化，请保存文件后重新导入。')
+        rid = self._import_doi_match(metadata)
+        created = rid is None
+        if created:
+            rid = self.save(metadata, project, deduplicate=False)
+            before = self._snapshot(rid)
+        elif getattr(self, '_import_observer', None):
+            self._import_observer(rid)
+        try:
+            primary = self.primary_attachment(rid)
+            role = 'supplement' if primary and self._managed_path(primary['path']).is_file() else 'primary'
+            path = self._add_attachment(rid, source, '', role, extract=role == 'primary', expected_sha=sha)
+        except Exception:
+            # A failed copy must not leave an empty entry that later imports match.
+            # Preserve any intervening user edit instead of deleting it.
+            if created:
+                with self.db:
+                    if not self.db.in_transaction:self.db.execute('BEGIN IMMEDIATE')
+                    if self._snapshot(rid) == before:
+                        for table in ('memberships', 'tag_memberships'):
+                            self.db.execute('DELETE FROM '+table+' WHERE paper=?', (rid,))
+                        self.db.execute('DELETE FROM papers WHERE id=?', (rid,))
+            raise
+        if not created:
+            # Keep reviewed fields and notes. Metadata for an alternate file is
+            # not permission to overwrite the existing paper's description.
+            current = self.get(rid)
+            missing = {key: value for key, value in metadata.items() if value and not current.get(key) and key not in ('text', 'references')}
+            if missing:self.save(missing, rid=rid)
+            self.assign(rid, project)
+        attachment = next(a for a in self.get(rid)['attachments'] if self._managed_path(a['path']) == path)
+        return self._finish_import(rid, attachment)
 
     def rename(self, rid, destinations=None):
         record = self.get(rid)
@@ -676,11 +744,16 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
             for score, b in sorted(matches, reverse=True)[:4]:
                 pair = tuple(sorted((a, b)))
                 edges[pair] = {'source': pair[0], 'target': pair[1], 'kind': 'similarity', 'weight': round(score, 3)}
-        dois = {r['doi']: r['id'] for r in records if r['doi']}
+        doi_ids = collections.defaultdict(list)
+        for r in records:
+            doi = normalize_doi(r.get('doi', ''))
+            if complete_doi(doi): doi_ids[doi].append(r['id'])
+        # Ambiguous duplicate identities cannot safely determine a citation target.
+        dois = {doi: ids[0] for doi, ids in doi_ids.items() if len(ids) == 1}
         citations = []
         for r in records:
             from references import parse_references
-            for ref in r.get('references') or parse_references(r.get('text','')):
+            for ref in r['references'] if 'references' in r else parse_references(r.get('text','')):
                 target=dois.get(normalize_doi(ref.get('doi','')))
                 if target and target!=r['id'] and not any(e['source']==r['id'] and e['target']==target for e in citations):citations.append({'source':r['id'],'target':target,'kind':'citation','weight':1})
         if include_candidates:
@@ -688,9 +761,9 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
             existing_titles={re.sub(r'\W+','',r['title']).lower() for r in records}
             candidates={};candidate_edges=[]
             for r in records:
-                refs=r.get('references') or parse_references(r.get('text',''))
+                refs=r['references'] if 'references' in r else parse_references(r.get('text',''))
                 for ref in refs:
-                    if normalize_doi(ref['doi']) in dois or re.sub(r'\W+','',ref['title']).lower() in existing_titles:continue
+                    if normalize_doi(ref['doi']) in doi_ids or (not ref['doi'] and re.sub(r'\W+','',ref['title']).lower() in existing_titles):continue
                     cid=ref['id']
                     if cid not in candidates and len(candidates)>=400:continue
                     if cid not in candidates:

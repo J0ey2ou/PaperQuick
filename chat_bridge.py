@@ -57,7 +57,7 @@ class ChatBridge:
                     raise ValueError('请先将正文转换为 PDF 或 DOCX，再交给 ChatGPT。')
                 if include_document and path.stat().st_size > MAX_FILE:
                     raise ValueError('网页接入目前支持 24 MB 以内的正文，请先压缩文件。')
-                fingerprint = digest(path)
+                fingerprint = digest(path) if include_document else None
                 namespace = lib.setting('chatgpt_library_id')
                 if not namespace:
                     namespace = secrets.token_hex(16)
@@ -203,7 +203,7 @@ class ChatBridge:
                 if existing and existing != url:
                     raise ValueError('这篇文献已绑定另一对话，请重新打开选区。')
                 saved['url'] = url
-                if primary_attached is True:
+                if primary_attached is True and item['fingerprint'] and any(f.get('primary') for f in item['files']):
                     saved['fingerprint'] = item['fingerprint']
                 lib.set_setting(provider + ':' + item['rid'], saved)
                 for pending in self.requests.values():

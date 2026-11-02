@@ -73,6 +73,21 @@ class LibraryDocumentTests(unittest.TestCase):
             self.assertTrue(metadata['references'])
             self.assertEqual(metadata['references'][0]['doi'], '10.1234/reference')
 
+    def test_docx_body_retains_tabs_breaks_and_excludes_deleted_text(self):
+        source = self.base / 'format.docx'
+        with zipfile.ZipFile(source, 'w') as archive:
+            archive.writestr('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>First</w:t><w:tab/><w:t>Second</w:t><w:br/><w:t>Third</w:t></w:r><w:del><w:r><w:t>Deleted</w:t></w:r></w:del></w:p></w:body></w:document>')
+        self.assertEqual(document_metadata(source)['text'], 'First\tSecond\nThird')
+
+    def test_graph_does_not_guess_between_duplicate_dois_or_ignore_explicit_empty_references(self):
+        first = self.lib.save({'title':'First', 'doi':'10.1234/shared'}, deduplicate=False)
+        second = self.lib.save({'title':'Second', 'doi':'10.1234/shared'}, deduplicate=False)
+        source = self.lib.save({'title':'Source', 'references':[{'id':'candidate-x','title':'First','doi':'10.1234/shared','year':'','query':'','raw':'','confidence':''}]})
+        empty = self.lib.save({'title':'Empty', 'references':[], 'text':'References\n1. A. Work title. Journal 2020; 1 doi:10.1234/shared'})
+        graph = self.lib.graph()
+        self.assertFalse(any(e['kind']=='citation' and e['source'] in (source,empty) and e['target'] in (first,second) for e in graph['edges']))
+        self.assertFalse(any(e['kind']=='candidate' and e['source']==empty for e in graph['edges']))
+
     def test_docx_without_properties_and_legacy_doc_fallback(self):
         source = self.base / 'minimal.docx'
         with zipfile.ZipFile(source, 'w') as archive:
@@ -207,6 +222,7 @@ class LibraryDocumentTests(unittest.TestCase):
         self.lib.save({'text': 'Existing original text', 'references': []}, rid=rid)
         self.assertEqual(self.lib.import_document(source, self.project), rid)
         self.assertEqual(self.lib.get(rid)['text'], 'Existing original text')
+        self.assertEqual(self.lib.get(rid)['title'], 'Existing article')
         self.assertEqual(self.lib.get(rid)['notes'], 'Retain notes')
         self.assertEqual(self.lib.primary_attachment(rid)['kind'], 'pdf')
 

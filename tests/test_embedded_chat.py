@@ -58,6 +58,15 @@ class EmbeddedTests(unittest.TestCase):
     def test_hidden_doubao_trusted_pdf_input(self):
         self.run_provider('doubao',trusted=True)
 
+    def test_hidden_gemini_adapter_roundtrip(self):
+        self.run_provider('gemini')
+
+    def test_hidden_qwen_adapter_roundtrip(self):
+        self.run_provider('qwen')
+
+    def test_hidden_kimi_adapter_roundtrip(self):
+        self.run_provider('kimi')
+
     def run_provider(self,provider,*,mapped=False,trusted=False):
         if mapped:
             # This branch may map windows ONLY on an explicitly created private
@@ -78,13 +87,13 @@ class EmbeddedTests(unittest.TestCase):
             from test_reader import text_pdf
             text_pdf(source)
             lib=Library(folder/'store');rid=lib.import_document(source);bridge=ChatBridge(lib.root)
-            fixture=folder/'fixture.html';html='''<!doctype html><main><form><div id="prompt-textarea" class="ProseMirror" contenteditable="true" role="textbox" style="min-height:40px"></div><div id="attachments"></div></form><input type="file" accept="application/pdf">
+            fixture=folder/'fixture.html';html='''<!doctype html><main><form><div id="prompt-textarea" class="ProseMirror ql-editor" contenteditable="true" role="textbox" style="min-height:40px"></div><div id="attachments"></div></form><input type="file" accept="application/pdf">
 <script>const editor=document.querySelector('[contenteditable]');document.querySelector('input').onchange=e=>{for(const file of e.target.files){const chip=document.createElement('div');chip.dataset.testid='attachment';chip.dataset.uploadState='complete';chip.textContent=file.name;document.querySelector('#attachments').append(chip);}};
 window.pqFixtureSubmit=()=>{const turn=document.createElement('article');turn.dataset.testid='conversation-turn-1';const user=document.createElement('div');user.dataset.messageAuthorRole='user';user.textContent=editor.innerText;turn.append(user,...document.querySelector('#attachments').children);document.querySelector('main').prepend(turn);editor.replaceChildren();history.pushState(null,'','/c/12345678-native-fixture');const answer=document.createElement('div');answer.dataset.messageAuthorRole='assistant';answer.innerHTML='<div class="markdown">Native fixture answer</div>';turn.append(answer);};</script></main>'''
             import hashlib
             html=html.replace('onchange=e=>{','onchange=async e=>{').replace("chip.dataset.uploadState='complete';", "const sum=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer()))).map(x=>x.toString(16).padStart(2,'0')).join('');chip.dataset.uploadState=sum==='PDF_SHA'?'complete':'error';").replace('PDF_SHA',hashlib.sha256(source.read_bytes()).hexdigest())
             if trusted:html=html.replace('onchange=async e=>{','onchange=async e=>{if(!e.isTrusted)return;')
-            target='/a/chat/s/12345678-native-fixture' if provider=='deepseek' else '/chat/12345678-native-fixture' if provider=='doubao' else '/c/12345678-native-fixture'
+            target={'deepseek':'/a/chat/s/12345678-native-fixture','doubao':'/chat/12345678-native-fixture','kimi':'/chat/12345678-native-fixture','gemini':'/app/12345678-native-fixture'}.get(provider,'/c/12345678-native-fixture')
             fixture.write_text(html.replace('/c/12345678-native-fixture',target),'utf-8')
             root=tk.Tk()
             if mapped:

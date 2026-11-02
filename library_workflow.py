@@ -72,6 +72,7 @@ class LibraryWorkflow:
                 after=self._snapshot(rid);recovered=rid not in existing_ids and bool(json.loads(after['paper']['data']).get('identity_recovery'))
                 entries.append({'source':str(path),'id':rid,'before':before.get(rid),'after':after,'identity_recovery':recovered});before[rid]=after
                 details.append({'source':str(path),'state':'recovered' if recovered else 'linked' if rid in existing_ids else 'imported','id':rid})
+                details[-1].update(getattr(self,'_last_import_result',None) or {})
             except Exception as exc:
                 errors.append(f'{Path(path).name}：{exc}')
                 details.append({'source':str(path),'state':'error','error':str(exc) or type(exc).__name__})

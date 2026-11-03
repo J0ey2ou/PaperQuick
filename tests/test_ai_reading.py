@@ -177,6 +177,21 @@ class AIHiddenUITests(unittest.TestCase):
         while not predicate() and time.monotonic()<deadline:self.root.update();time.sleep(.01)
         self.assertTrue(predicate())
 
+    def test_pasted_text_defaults_to_no_attachment_for_all_embedded_providers(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        p=self.panel;p.mode.set('内嵌网页');p.selection=None
+        p.embedded=SimpleNamespace(open=Mock(),poll=Mock(),rid=self.rid)
+        self.assertEqual(p.scope.get(),'仅选文');self.assertFalse(p.upload.get())
+        p.quote.insert('1.0','Pasted evidence')
+        with patch('chat_bridge.MAX_FILE',1),patch('chat_bridge.digest',side_effect=AssertionError('Text-only should not hash attachment')):
+            for provider in ('ChatGPT','豆包','DeepSeek','Gemini','千问 / Qwen','Kimi'):
+                p.provider.set(provider);p.send();self.wait(lambda:not p.active)
+                self.assertEqual(p.embedded.open.call_count,('ChatGPT','豆包','DeepSeek','Gemini','千问 / Qwen','Kimi').index(provider)+1)
+                bridge=self.reader.chat_bridge();token=next(reversed(bridge.requests));payload=bridge.payload(token)
+                self.assertIn('Pasted evidence',payload['prompt']);self.assertEqual(payload['files'],[])
+        p.embedded=None
+
     def test_api_question_answer_note_and_dedup_end_to_end(self):
         p=self.panel;p.mode.set('API');p.provider.set('DeepSeek');p.scope.set('仅选文');p.select('解释这段')
         profile={'endpoint':'https://fixture.invalid/v1','model':'fixture','stream':True}

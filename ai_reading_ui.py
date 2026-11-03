@@ -107,13 +107,16 @@ class AIReadingPanel:
         ttk.Button(top, text='AI 设置', command=self.settings).pack(side='left')
         ttk.Button(top, text='保存模板', command=self.save_template).pack(side='left', padx=4)
         ttk.Button(top, text='新建对话', command=self.new_chat).pack(side='right')
-        self.source = tk.StringVar(value='先在原文选中文字，再右键“询问 AI”。')
+        self.source = tk.StringVar(value='选中文字后右键询问 AI，或直接在下方粘贴文字。')
         ttk.Label(form, textvariable=self.source, wraplength=290, style='Muted.TLabel').pack(fill='x', pady=4)
+        ttk.Button(form, text='使用当前选文', command=self.select).pack(fill='x', pady=2)
+        ttk.Label(form, text='原文范围', style='Muted.TLabel').pack(anchor='w')
         self.quote = text_box(form, 3)
-        self.scope = tk.StringVar(value='选文及上下文')
+        self.scope = tk.StringVar(value='仅选文')
         ttk.Combobox(form, textvariable=self.scope, values=['仅选文', '选文及上下文', '整篇文本'], state='readonly').pack(fill='x', pady=3)
-        self.upload = tk.BooleanVar(value=True)
-        ttk.Checkbutton(form, text='网页模式首次附上正文文件', variable=self.upload).pack(anchor='w')
+        self.upload = tk.BooleanVar(value=False)
+        ttk.Checkbutton(form, text='同时上传正文文件（可选，受网页大小限制）', variable=self.upload).pack(anchor='w')
+        ttk.Label(form, text='选择问题模板，也可直接修改问题', wraplength=290, style='Muted.TLabel').pack(anchor='w', pady=(5,0))
         self.template = tk.StringVar(value='解释这段')
         combo = ttk.Combobox(form, textvariable=self.template, values=list(TEMPLATES), state='readonly');combo.pack(fill='x', pady=3);combo.bind('<<ComboboxSelected>>', self.set_template)
         self.question = text_box(form, 3);self.set_template()
@@ -159,7 +162,7 @@ class AIReadingPanel:
     def document_changed(self):
         if getattr(self,'embedded',None) and getattr(self.embedded,'rid',None)!=self.reader.rid:
             self.reader.notebook.hide(self.embedded.tab)
-        self.bound_rid = self.reader.rid;self.selection = None;self.quote.delete('1.0', 'end');self.source.set('先在原文选中文字，再右键“询问 AI”。');self.refresh_history()
+        self.bound_rid = self.reader.rid;self.selection = None;self.quote.delete('1.0', 'end');self.source.set('选中文字后右键询问 AI，或直接在下方粘贴文字。');self.refresh_history()
 
     def select(self, question=None):
         r = self.reader
@@ -210,10 +213,12 @@ class AIReadingPanel:
     def send(self):
         r = self.reader
         if self.active:self.status.set('当前请求尚未结束，请稍候。');return
-        if not r.rid or not getattr(self, 'selection', None):self.status.set('先在文献中选中文字，再右键询问 AI。');return
+        if not r.rid:self.status.set('请先打开文献。');return
         provider = self.names[self.provider.get()];mode = self.mode.get();rid = r.rid
         if mode != 'API' and not PROVIDERS[provider]['web']:self.status.set('自定义服务请使用 API 模式。');return
-        anchor = copy.deepcopy(self.selection);quote = self.quote.get('1.0', 'end-1c');question = self.question.get('1.0', 'end-1c');scope = self.scope.get()
+        quote = self.quote.get('1.0', 'end-1c');question = self.question.get('1.0', 'end-1c');scope = self.scope.get()
+        if not quote.strip() and scope != '整篇文本':self.status.set('请先选中文字或在原文框粘贴文字。');return
+        anchor = copy.deepcopy(getattr(self, 'selection', None)) or {'page':r.page, 'rect':[.06,.06,.06,.06], 'attachment':r.attachment_id}
         if not question.strip():self.status.set('请填写问题。');return
         anchor['quote'] = quote;anchor['question'] = question;anchor['title'] = r.title.get()
         profile = load_profile(self.directory, provider);store = self.history_store();expected = store.load()

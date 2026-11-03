@@ -44,7 +44,7 @@ class LibraryWindow(SmartViewsMixin):
             value=tk.StringVar(value='0');self.metrics.append(value)
             tk.Label(card,textvariable=value,bg=PANEL,fg=ACCENT,font=('Segoe UI',20,'bold'),anchor='w').pack(side='left',padx=(14,10),pady=8)
             tk.Label(card,text=label,bg=PANEL,fg=MUTED,font=(FONT,10),anchor='w').pack(side='left',padx=(0,12))
-        toolbar=ttk.Frame(self.win,padding=(24,4,24,8));toolbar.pack(fill='x');flow_bar(toolbar)
+        toolbar=ttk.Frame(self.win,padding=(24,4,24,8));self.toolbar=toolbar;toolbar.pack(fill='x');flow_bar(toolbar)
         self.controls=[]
         for title,command in [('导入文档',self.import_pdfs),('导入文件夹',self.import_folder),('新增条目',self.new_record),('离线图谱',self.graph),('Word 引用',self.word)]:
             button=ttk.Button(toolbar,text=title,command=command,style='Accent.TButton' if title=='导入文档' else 'TButton');button.pack(side='left',padx=(0,9));self.controls.append(button)
@@ -440,7 +440,8 @@ class LibraryWindow(SmartViewsMixin):
     def batch_import(self,paths,pid):
         def done(result):
             self.reveal_import(result,pid)
-            self.status.set(f"导入完成：成功 / 关联 {result['count']} 份，失败 {len(result['errors'])} 份。详细结果见“导入记录”。")
+            linked=sum(item['state']=='linked' for item in result.get('details',[]))
+            self.status.set(f"导入完成：成功 {result['count']} 份（其中 {linked} 份已存在，已定位已有文献），失败 {len(result['errors'])} 份。")
             if result['errors']:messagebox.showwarning('部分文件未导入','\n'.join(result['errors'][:12]),parent=self.win)
             new_ids=result.get('new_paper_ids',[])
             if len(new_ids)==1:self.chat_full_paper(new_ids[0])
@@ -453,13 +454,16 @@ class LibraryWindow(SmartViewsMixin):
         panel=ttk.Frame(dialog,padding=18);panel.pack(fill='both',expand=True)
         ttk.Label(panel,text='逐文件导入结果',style='Section.TLabel').pack(anchor='w',pady=(0,12))
         text=tk.Text(panel,wrap='word');scroll=ttk.Scrollbar(panel,command=text.yview);scroll.pack(side='right',fill='y');text.configure(yscrollcommand=scroll.set);text.pack(fill='both',expand=True)
-        states={'imported':'已导入','linked':'已关联已有文献','recovered':'已修复错误合并并恢复独立文献','error':'失败'}
-        for item in report.get('files',[]):text.insert('end',f"{states.get(item['state'],item['state'])} · {item.get('seconds',0):.2f}s · {item['source']}\n"+(item.get('error','')+'\n' if item.get('error') else '')+'\n')
+        states={'imported':'已导入','linked':'文件已存在，已定位已有文献','recovered':'已修复错误合并并恢复独立文献','error':'失败'}
+        for item in report.get('files',[]):
+            destination=('对应文献：'+item['title']+'\n归档文件：'+str(self.library.root/item['path'])+'\n') if item.get('path') else ''
+            text.insert('end',f"{states.get(item['state'],item['state'])} · {item.get('seconds',0):.2f}s · {item['source']}\n"+destination+(item.get('error','')+'\n' if item.get('error') else '')+'\n')
         text.configure(state='disabled')
 
     def reveal_import(self,result,pid):
         if not result.get('paper_ids'):return
         self.current_project=pid
+        self.extra_view_criteria={}
         self.table_state.filters.clear();self.search.set('');self.status_filter.set('全部状态');self.rating_filter.set('全部评分');self.tag_filter.set('全部标签')
         self.refresh()
         visible=[rid for rid in result['paper_ids'] if self.tree.exists(rid)]

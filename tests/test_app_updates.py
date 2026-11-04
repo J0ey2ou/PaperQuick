@@ -58,6 +58,14 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.root/'README.md').read_bytes(),b'old notes')
         self.assertFalse((self.root/'version.json').exists())
 
+    def test_installed_files_remain_successful_when_receipt_storage_fails(self):
+        archive,release=self.package();plan=updates.stage_archive(archive,self.root,release)
+        with patch('app_updates._write_install_result',side_effect=OSError('receipt folder unavailable')):
+            result=updates.apply_staged(plan)
+        self.assertEqual(result['state'],'installed')
+        self.assertIn('receipt folder unavailable',result['report_error'])
+        self.assertEqual((self.root/'文献直达.exe').read_bytes(),self.files['文献直达.exe'])
+
     def test_corrupt_package_or_staged_file_never_changes_program(self):
         archive,release=self.package();release['sha256']='a'*64
         with self.assertRaisesRegex(ValueError,'校验失败'):updates.stage_archive(archive,self.root,release)

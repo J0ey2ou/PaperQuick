@@ -40,6 +40,7 @@ class LibraryWorkflow:
     def workflow_schema(self):
         self.db.executescript('''
         CREATE TABLE IF NOT EXISTS import_batches(id TEXT PRIMARY KEY,at REAL,project TEXT,state TEXT,data TEXT);
+        CREATE TABLE IF NOT EXISTS import_batch_entries(batch TEXT,sequence INTEGER,data TEXT NOT NULL,PRIMARY KEY(batch,sequence));
         CREATE TABLE IF NOT EXISTS paper_trash(id TEXT PRIMARY KEY,at REAL,state TEXT,data TEXT);
         CREATE TABLE IF NOT EXISTS paper_relations(id TEXT PRIMARY KEY,source TEXT,target TEXT,label TEXT,created REAL,UNIQUE(source,target,label));
         CREATE TABLE IF NOT EXISTS graph_groups(id TEXT PRIMARY KEY,label TEXT NOT NULL,shape TEXT NOT NULL,created REAL);
@@ -58,13 +59,14 @@ class LibraryWorkflow:
         """Journal each selected file; undo never overwrites subsequently edited papers."""
         self.project(project)
         paths=list(paths);batch=uuid.uuid4().hex;entries=[];errors=[];paper_ids=[];details=[]
-        with self.db:self.db.execute('INSERT INTO import_batches VALUES(?,?,?,?,?)',(batch,time.time(),project,'running','[]'))
+        with self.db:self.db.execute('INSERT INTO import_batches VALUES(?,?,?,?,?)',(batch,time.time(),project,'running','{"entries":"rows-v1"}'))
         before={}
         def observe(rid):
             if rid and rid not in before:before[rid]=self._snapshot(rid) if rid in existing_ids else None
         self._import_observer=observe
         for index,path in enumerate(paths):
             started=time.perf_counter()
+            first_entry = len(entries)
             existing_ids={r[0] for r in self.db.execute('SELECT id FROM papers')}
             try:
                 rid=self.import_document(path,project)
@@ -83,7 +85,11 @@ class LibraryWorkflow:
                     elif row['id'] in before:
                         after=self._snapshot(row['id'])
                         if after!=before[row['id']]:entries.append({'source':str(path),'id':row['id'],'before':before[row['id']],'after':after});before[row['id']]=after
-            with self.db:self.db.execute('UPDATE import_batches SET data=? WHERE id=?',(json.dumps(entries,ensure_ascii=False),batch))
+            # Persist only this file's new undo records, including its failure
+            # snapshot. Earlier (potentially large) full-text snapshots stay put.
+            with self.db:
+                self.db.executemany('INSERT INTO import_batch_entries VALUES(?,?,?)',
+                    ((batch,number,json.dumps(entries[number],ensure_ascii=False)) for number in range(first_entry,len(entries))))
             details[-1]['seconds']=round(time.perf_counter()-started,3)
             if progress:progress(index+1,len(paths),Path(path).name)
         self._import_observer=None
@@ -93,9 +99,19 @@ class LibraryWorkflow:
                 'paper_ids':list(dict.fromkeys(paper_ids)),'details':details,
                 'new_paper_ids':list(dict.fromkeys(e['id'] for e in entries if e['before'] is None and e['after']['attachments']))}
 
-    def latest_import(self):
+    def latest_import(self, include_entries=True):
         row=self.db.execute("SELECT * FROM import_batches WHERE state IN ('ready','running') ORDER BY at DESC LIMIT 1").fetchone()
-        return dict(row) if row else None
+        if not row:return None
+        result = dict(row)
+        if include_entries:result['data'] = json.dumps(self._import_entries(row),ensure_ascii=False)
+        return result
+
+    def _import_entries(self, row):
+        data = json.loads(row['data'])
+        if isinstance(data,list):return data  # Old releases and exported journals.
+        if data != {'entries':'rows-v1'}:raise ValueError('导入记录格式不受支持，请升级软件。')
+        return [json.loads(item[0]) for item in self.db.execute(
+            'SELECT data FROM import_batch_entries WHERE batch=? ORDER BY sequence',(row['id'],))]
 
     def _managed_path(self, relative):
         path=(self.root/relative).resolve()
@@ -123,9 +139,9 @@ class LibraryWorkflow:
             if target.exists() and not source.exists():target.rename(source)
 
     def undo_import(self, batch=None):
-        row=self.db.execute('SELECT * FROM import_batches WHERE id=?',(batch,)).fetchone() if batch else self.latest_import()
+        row=self.db.execute('SELECT * FROM import_batches WHERE id=?',(batch,)).fetchone() if batch else self.latest_import(include_entries=False)
         if not row or row['state'] not in ('ready','running'):raise ValueError('没有可以撤回的导入记录。')
-        entries=json.loads(row['data']);restored=0;kept=set()
+        entries=self._import_entries(row);restored=0;kept=set()
         # Repeated imports of the same paper are reversed in file order.
         for entry in reversed(entries):
             rid=entry['id'];current=self._snapshot(rid)

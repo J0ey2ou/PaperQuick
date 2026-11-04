@@ -92,7 +92,7 @@ class AISettings:
 class AIReadingPanel:
     def __init__(self, reader):
         self.reader = reader;self.directory = reader.directory;self.events = queue.Queue();self.active = None;self.cancel = None;self.job_id = 0;self.turns = [];self.answer_turn = None;self.closed = False;self.last_inbox_check = 0;self.bound_rid = None
-        from ui_widgets import scrollable_page, install_scrolling
+        from ui_widgets import scrollable_page, install_scrolling, flow_bar
         self.frame, form = scrollable_page(reader.notebook, padding=6);reader.notebook.add(self.frame, text='AI 阅读');install_scrolling(reader.frame)
         lib = Library(self.directory)
         try:defaults = lib.setting('ai-default', {'provider':'chatgpt', 'mode':'内嵌网页' if os.name=='nt' else '网页账号'})
@@ -103,7 +103,7 @@ class AIReadingPanel:
         modes=['内嵌网页','网页账号','API'] if os.name=='nt' else ['网页账号','API']
         for variable, values in [(self.provider, list(self.names)), (self.mode, modes)]:
             combo = ttk.Combobox(form, textvariable=variable, values=values, state='readonly');combo.pack(fill='x', pady=3);combo.bind('<<ComboboxSelected>>', self.change_provider)
-        top = ttk.Frame(form);top.pack(fill='x', pady=4)
+        top = ttk.Frame(form);top.pack(fill='x', pady=4);flow_bar(top)
         ttk.Button(top, text='AI 设置', command=self.settings).pack(side='left')
         ttk.Button(top, text='保存模板', command=self.save_template).pack(side='left', padx=4)
         ttk.Button(top, text='新建对话', command=self.new_chat).pack(side='right')
@@ -120,7 +120,7 @@ class AIReadingPanel:
         self.template = tk.StringVar(value='解释这段')
         combo = ttk.Combobox(form, textvariable=self.template, values=list(TEMPLATES), state='readonly');combo.pack(fill='x', pady=3);combo.bind('<<ComboboxSelected>>', self.set_template)
         self.question = text_box(form, 3);self.set_template()
-        controls = ttk.Frame(form);controls.pack(fill='x', pady=4)
+        controls = ttk.Frame(form);controls.pack(fill='x', pady=4);flow_bar(controls)
         self.send_button = ttk.Button(controls, text='提问 / 打开网页', command=self.send, style='Accent.TButton');self.send_button.pack(side='left')
         def button_label(*_):self.send_button.configure(text={'内嵌网页':'在此打开聊天','API':'发送提问','网页账号':'打开聊天网页'}.get(self.mode.get(),'提问'))
         self.mode.trace_add('write',button_label);button_label()
@@ -129,6 +129,14 @@ class AIReadingPanel:
         ttk.Label(form, textvariable=self.status, wraplength=290, style='Muted.TLabel').pack(fill='x', pady=4)
         self.history = ttk.Combobox(form, state='readonly');self.history.pack(fill='x', pady=3);self.history.bind('<<ComboboxSelected>>', self.select_answer)
         self.answer = text_box(form, 9)
+        self.answer_links={};self._link_press=None;self._answer_links_job=None
+        self.answer.tag_configure('answer-web-link',foreground='#2473b7',underline=True)
+        self.answer.tag_bind('answer-web-link','<Button-1>',self.link_press)
+        self.answer.tag_bind('answer-web-link','<ButtonRelease-1>',self.link_release)
+        self.answer.tag_bind('answer-web-link','<Enter>',lambda _:self.answer.configure(cursor='hand2'))
+        self.answer.tag_bind('answer-web-link','<Leave>',lambda _:self.answer.configure(cursor='xterm'))
+        self.answer.edit_modified(False);self.answer.bind('<<Modified>>',self.schedule_answer_links,add='+')
+        self.answer.bind('<Destroy>',lambda _:self.cancel_answer_links(),add='+')
         controls = ttk.Frame(form);controls.pack(fill='x', pady=4)
         self.note_button = ttk.Button(controls, text='回答 / 选中部分加入笔记', command=self.save_note);self.note_button.pack(fill='x')
         ttk.Button(controls, text='定位原选文', command=self.locate).pack(fill='x', pady=3)
@@ -202,6 +210,44 @@ class AIReadingPanel:
         if not 0 <= index < len(self.turns):return
         self.answer_turn = copy.deepcopy(self.turns[index]);self.answer_turn['rid'] = self.reader.rid
         self.answer.delete('1.0', 'end');self.answer.insert('1.0', self.answer_turn['answer'])
+        self.refresh_answer_links()
+
+    def refresh_answer_links(self):
+        from web_links import answer_links
+        self.cancel_answer_links()
+        self.answer.tag_remove('answer-web-link','1.0','end');self.answer_links={}
+        text=self.answer.get('1.0','end-1c')
+        for start,end,url in answer_links(text):
+            # Text's character arithmetic follows Unicode characters, unlike
+            # Tcl 8.6 string length, which counts supplementary characters twice.
+            first=self.answer.index(f'1.0+{start}c');last=self.answer.index(f'1.0+{end}c')
+            self.answer.tag_add('answer-web-link',first,last);self.answer_links[(first,last)]=url
+
+    def schedule_answer_links(self,event=None):
+        if self.answer.edit_modified():
+            self.answer.edit_modified(False)
+            if self._answer_links_job is None:self._answer_links_job=self.answer.after(250,self.refresh_answer_links)
+
+    def cancel_answer_links(self):
+        if self._answer_links_job is not None:
+            self.answer.after_cancel(self._answer_links_job);self._answer_links_job=None
+
+    def link_press(self,event):
+        self._link_press=(event.x,event.y)
+
+    def link_release(self,event):
+        point=self._link_press;self._link_press=None
+        if point is None or abs(event.x-point[0])>4 or abs(event.y-point[1])>4 or self.answer.tag_ranges('sel'):return
+        self.refresh_answer_links()
+        index=self.answer.index(f'@{event.x},{event.y}')
+        for (first,last),url in self.answer_links.items():
+            if self.answer.compare(first,'<=',index) and self.answer.compare(index,'<',last):
+                self.open_answer_link(url);return
+
+    def open_answer_link(self,url):
+        from web_links import open_web_link
+        try:open_web_link(url);self.status.set('已在默认浏览器打开回答中的链接。')
+        except (ValueError,OSError) as exc:self.status.set(str(exc))
 
     def new_chat(self):
         if not self.reader.rid:return
@@ -308,6 +354,9 @@ class AIReadingPanel:
             if not any(a['id'] == anchor['attachment'] for a in record['attachments']):raise ValueError('原附件已移除，请先恢复文献附件。')
         except ValueError as exc:self.status.set(str(exc));return
         finally:lib.close()
+        try:r.prepare_note_edit()
+        except Exception:
+            self.status.set('保存未完成，请先确认其他阅读页的笔记已保存。');return
         import hashlib
         note_key = hashlib.sha256((turn['id'] + '\n' + text).encode()).hexdigest()
         if any(a.get('ai_note_key') == note_key for a in r.annotations):self.status.set('这段回答已经加入笔记。');return
@@ -326,7 +375,9 @@ class AIReadingPanel:
         except Exception:
             r.notes.delete(start,'end-1c');r.dirty=was_dirty;r.notes.edit_modified(was_modified);self.status.set('保存未完成，请检查文献库是否可写。');return
         if not added:r.notes.delete(start,'end-1c');r.dirty=was_dirty;r.notes.edit_modified(was_modified)
-        else:r.dirty=False;r.notes.edit_modified(False)
+        else:
+            r.dirty=False;r.notes.edit_modified(False)
+            r.sync_note_peers()
         r._annotation_ids={a['id'] for a in r.annotations};r.refresh_annotations();r.draw_annotations()
         r.notebook.select(r.note_tab);self.status.set('回答已加入笔记并标记原文位置。' if added else '这段回答已经加入笔记。')
 

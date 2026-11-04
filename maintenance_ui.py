@@ -33,6 +33,7 @@ class MaintenanceWindow:
         self.directory = Path(directory).resolve()
         self.on_restored = on_restored
         self.closed = False
+        self.task_page=0;self.task_page_size=100;self._row_cache={}
         root = parent.winfo_toplevel()
         if manager is None:
             manager = shared_task_manager(parent, directory)
@@ -81,6 +82,10 @@ class MaintenanceWindow:
         scroll.pack(side='right', fill='y')
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.bind('<<TreeviewSelect>>', lambda _: self.show_selected())
+        pages=ttk.Frame(panel);pages.pack(fill='x',pady=(6,0))
+        self.newer_button=ttk.Button(pages,text='较新任务',command=lambda:self.change_task_page(-1));self.newer_button.pack(side='left')
+        self.older_button=ttk.Button(pages,text='较早任务',command=lambda:self.change_task_page(1));self.older_button.pack(side='left',padx=6)
+        self.page_status=tk.StringVar();ttk.Label(pages,textvariable=self.page_status,style='Muted.TLabel').pack(side='right')
         self.detail = tk.StringVar(value='任务进度、结果和异常信息会显示在这里。')
         ttk.Label(panel, textvariable=self.detail, style='Muted.TLabel', wraplength=830, justify='left').pack(fill='x', pady=8)
         actions = ttk.Frame(panel)
@@ -100,7 +105,10 @@ class MaintenanceWindow:
 
     @property
     def busy(self):
-        return any(task['status'] in TaskManager.ACTIVE for task in self.manager.list_tasks())
+        return self.manager.has_active_tasks()
+
+    def change_task_page(self, direction):
+        self.task_page=max(0,self.task_page+direction);self.refresh(schedule=False)
 
     def choose_archive(self):
         value = filedialog.askopenfilename(parent=self.win, title='选择文献库备份', filetypes=[('文献库备份', '*.zip')])
@@ -136,6 +144,7 @@ class MaintenanceWindow:
     def _submit(self, kind, label, data, worker):
         try:
             task_id = self.manager.submit(kind, label, worker, metadata=data)
+            self.task_page=0
             self.status.set('任务已加入队列，可继续使用软件。')
             self.refresh(schedule=False)
             self.tree.selection_set(task_id)
@@ -148,21 +157,33 @@ class MaintenanceWindow:
     def refresh(self, schedule=True):
         if self.closed:
             return
-        tasks = self.manager.list_tasks()
+        total=self.manager.task_count()
+        self.task_page=min(self.task_page,max(0,(total-1)//self.task_page_size))
+        offset=self.task_page*self.task_page_size
+        tasks = self.manager.list_tasks(limit=self.task_page_size,offset=offset)
+        self.page_status.set(f'{offset+1 if total else 0}–{offset+len(tasks)} / {total} 项任务')
+        self.newer_button.configure(state='normal' if self.task_page else 'disabled')
+        self.older_button.configure(state='normal' if offset+len(tasks)<total else 'disabled')
         known = set(self.tree.get_children())
         for task in tasks:
             percentage = f"{min(100, round(100 * task['done'] / task['total']))}%" if task['total'] else '—'
             values = (STATES.get(task['status'], task['status']), percentage,
                       datetime.fromtimestamp(task['created']).strftime('%m-%d %H:%M:%S'))
             if task['id'] in known:
-                self.tree.item(task['id'], text=task['label'], values=values)
+                if self._row_cache.get(task['id'])!=(task['label'],values):
+                    self.tree.item(task['id'], text=task['label'], values=values)
             else:
-                self.tree.insert('', 0, iid=task['id'], text=task['label'], values=values)
+                self.tree.insert('', 'end', iid=task['id'], text=task['label'], values=values)
+            self._row_cache[task['id']]=(task['label'],values)
         for stale in known - {task['id'] for task in tasks}:
             self.tree.delete(stale)
+            self._row_cache.pop(stale,None)
+        identifiers=tuple(task['id'] for task in tasks)
+        if self.tree.get_children()!=identifiers:
+            for index,identifier in enumerate(identifiers):self.tree.move(identifier,'',index)
         self.show_selected()
         if schedule:
-            self.poll_job = self.win.after(250, self.refresh)
+            self.poll_job = self.win.after(250 if self.busy else 1000, self.refresh)
 
     def selected_task(self):
         selected = self.tree.selection()
@@ -188,6 +209,8 @@ class MaintenanceWindow:
                     if len(warnings) > 3:
                         text += '…（完整记录保存在备份清单）'
             self.detail.set(text)
+        else:
+            self.detail.set('选择一项任务查看进度、结果或异常信息。')
 
     def cancel_selected(self):
         task = self.selected_task()
@@ -200,6 +223,7 @@ class MaintenanceWindow:
         if task:
             try:
                 task_id = self.manager.retry(task['id'])
+                self.task_page=0
                 self.refresh(schedule=False)
                 self.tree.selection_set(task_id)
             except Exception as exc:

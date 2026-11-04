@@ -133,12 +133,14 @@ class ResearchStore:
 
     def papers(self, project=None):
         scope = self._scope(project)
-        rows = self.db.execute("SELECT id,data FROM papers ORDER BY updated DESC").fetchall()
-        allowed = None if scope is None else {r['paper'] for r in self.db.execute('SELECT paper,project FROM memberships') if r['project'] in scope}
+        query = 'SELECT id,data FROM paper_summaries'
+        args = ()
+        if scope is not None:
+            query += ' WHERE id IN (SELECT paper FROM memberships WHERE project IN (SELECT value FROM json_each(?)))'
+            args = (json.dumps(list(scope)),)
+        rows = self.db.execute(query+' ORDER BY updated DESC', args)
         result = []
         for row in rows:
-            if allowed is not None and row['id'] not in allowed:
-                continue
             data = json.loads(row['data'])
             result.append({'id': row['id'], 'title': display_name(data), 'doi': data.get('doi', ''), 'year': data.get('year', ''), 'authors': data.get('authors', '')})
         return result

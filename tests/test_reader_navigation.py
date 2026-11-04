@@ -8,6 +8,34 @@ from pypdf import PdfWriter
 from reader_navigation import pdf_outline, text_headings, translate
 
 class NavigationTests(unittest.TestCase):
+    def test_outline_cache_uses_file_revision_and_returns_independent_items(self):
+        from reader_navigation import clear_outline_cache
+        clear_outline_cache()
+        revision=('fixture.pdf',1,2,3,4,5)
+        with patch('reader_navigation.file_version',return_value=revision),patch('reader_navigation._read_pdf_outline',return_value=[{'title':'Methods','page':0,'level':0}]) as read:
+            first=pdf_outline('fixture.pdf');first[0]['title']='Changed locally'
+            self.assertEqual(pdf_outline('fixture.pdf')[0]['title'],'Methods');self.assertEqual(read.call_count,1)
+        with patch('reader_navigation.file_version',return_value=revision[:-1]+(6,)),patch('reader_navigation._read_pdf_outline',return_value=[]) as read:
+            self.assertEqual(pdf_outline('fixture.pdf'),[]);self.assertEqual(pdf_outline('fixture.pdf'),[]);self.assertEqual(read.call_count,1)
+        clear_outline_cache()
+
+    def test_outline_does_not_cache_a_file_changed_during_read(self):
+        from reader_navigation import clear_outline_cache, _outline_cache
+        clear_outline_cache();revision=('changing.pdf',1,2,3,4,5)
+        with patch('reader_navigation.file_version',side_effect=[revision,revision[:-1]+(6,)]),patch('reader_navigation._read_pdf_outline',return_value=[]):
+            with self.assertRaisesRegex(ValueError,'读取时已改变'):pdf_outline('changing.pdf')
+        self.assertEqual(len(_outline_cache),0)
+
+    def test_cancelled_outline_never_reads_or_returns_cached_data(self):
+        from reader_navigation import clear_outline_cache
+        from pdf_reader_core import DocumentReadCancelled
+        clear_outline_cache()
+        with patch('reader_navigation.file_version',return_value=('fixture.pdf',1,2,3,4,5)),patch('reader_navigation._read_pdf_outline',return_value=[]) as read:
+            pdf_outline('fixture.pdf')
+            with self.assertRaises(DocumentReadCancelled):pdf_outline('fixture.pdf',cancelled=lambda:True)
+            self.assertEqual(read.call_count,1)
+        clear_outline_cache()
+
     def test_pdf_outline_targets_and_nesting(self):
         writer=PdfWriter()
         writer.add_blank_page(width=200,height=200);writer.add_blank_page(width=200,height=200)

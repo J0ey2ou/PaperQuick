@@ -84,6 +84,38 @@ class ReaderWorkerLifetimeTests(unittest.TestCase):
         message=events.get_nowait();self.assertEqual(message[0],'page')
         self.assertEqual(message[2][1],0)
 
+    def test_initial_fit_renders_at_viewport_width_once(self):
+        from pdf_reader_core import render_page_data
+        source=self.base/'first-frame.pdf';make_pdf(source,['First frame'])
+        rid=self.library.import_document(source)
+        reader=ReaderPage(self.root,self.directory,lambda _:None,lambda _:None)
+        try:
+            with patch('reader_ui.threading.Thread',side_effect=self.queue_thread),patch.object(reader.canvas,'winfo_width',return_value=1000),patch('pdf_reader_core.render_page_data',wraps=render_page_data) as render:
+                reader.open(rid)
+                self.pending.pop()();reader.poll()
+                self.assertFalse(reader.fit_pending)
+                self.assertAlmostEqual(reader.scale,1.6)
+                self.assertEqual(render.call_count,1)
+                self.assertFalse(reader.loading)
+        finally:reader.close()
+
+    def test_replaced_file_between_worker_and_poll_drops_stale_preparation(self):
+        import os
+        source=self.base/'replaced.pdf';make_pdf(source,['Original frame'])
+        rid=self.library.import_document(source)
+        reader=ReaderPage(self.root,self.directory,lambda _:None,lambda _:None)
+        try:
+            with patch('reader_ui.threading.Thread',side_effect=self.queue_thread):
+                reader.open(rid);self.pending.pop()()
+                replacement=self.base/'replacement.pdf';make_pdf(replacement,['Changed frame'])
+                os.replace(replacement,reader.source_path)
+                reader.poll()
+            self.assertIsNone(reader.path)
+            self.assertEqual(reader.document_canvas.layout,{})
+            self.assertFalse(reader.loading)
+            self.assertIn('已改变',reader.status.get())
+        finally:reader.close()
+
     def test_visible_page_worker_does_not_retain_canvas_or_reader(self):
         source=self.base/'continuous.pdf';make_pdf(source,['Visible page'])
         rid=self.library.import_document(source)
@@ -97,8 +129,8 @@ class ReaderWorkerLifetimeTests(unittest.TestCase):
         self.assertIsNone(reference(),'Queued visible-page work still owns the Tk reader')
         self.assertIsNone(canvas(),'Queued visible-page work still owns the document canvas')
         self.finish_worker()
-        message=events.get_nowait();self.assertEqual(message[0],'canvas-page')
-        self.assertIsNone(message[2][3])
+        # Closing cancels unstarted viewport work as well as releasing Tk.
+        self.assertTrue(events.empty())
 
 
 if __name__=='__main__':unittest.main()

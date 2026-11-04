@@ -13,6 +13,42 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 
+// BEGIN NAVIGATION POLICY: pure URL/gesture rules, testable without WebView2.
+public static class ChatNavigationPolicy {
+    static bool WebUri(string value,out Uri uri){
+        uri=null;
+        if(String.IsNullOrEmpty(value)||value.Length>8192||value.IndexOf('\\')>=0)return false;
+        foreach(char ch in value)if(Char.IsWhiteSpace(ch)||Char.IsControl(ch))return false;
+        return Uri.TryCreate(value,UriKind.Absolute,out uri)&&(uri.Scheme=="https"||uri.Scheme=="http")&&uri.Host!=""&&uri.UserInfo=="";
+    }
+    static bool Authentication(Uri uri){
+        if(uri.Scheme!="https"||!uri.IsDefaultPort)return false;
+        string h=uri.Host;
+        return h=="accounts.google.com"||h=="login.microsoftonline.com"||h=="login.live.com"||h=="appleid.apple.com"||h=="auth.openai.com"||h=="auth0.openai.com";
+    }
+    static bool SamePlatform(string chat,string target){
+        Uri source,destination;
+        if(!WebUri(chat,out source)||!WebUri(target,out destination)||destination.Scheme!="https"||!destination.IsDefaultPort)return false;
+        string family=source.Host;
+        if(family=="www.doubao.com")family="doubao.com";
+        else if(family=="chat.deepseek.com")family="deepseek.com";
+        else if(family=="chat.qwen.ai")family="qwen.ai";
+        else if(family=="www.kimi.com")family="kimi.com";
+        // Gemini must not treat every google.com research/search URL as chat.
+        return destination.Host==family||destination.Host.EndsWith("."+family,StringComparison.OrdinalIgnoreCase);
+    }
+    public static string Classify(string chat,string target,bool userInitiated,bool redirected,bool newWindow){
+        Uri uri;if(!WebUri(target,out uri))return "blocked";
+        if(newWindow){
+            if(!userInitiated)return "blocked";
+            return Authentication(uri)?"login":"external";
+        }
+        if(uri.Scheme=="https"&&(SamePlatform(chat,target)||Authentication(uri)||!userInitiated||redirected))return "embed";
+        return userInitiated&&!redirected?"external":"blocked";
+    }
+}
+// END NAVIGATION POLICY
+
 
 // A raw child HWND plus a Core controller: no WinForms Form/Control parking,
 // managed visibility heuristics, or reparenting of an already-created browser.
@@ -41,8 +77,8 @@ class EmbeddedChat : NativeWindow {
     CoreWebView2 core;
     CoreWebView2Environment environment;
     readonly TaskCompletionSource<bool> browserEnded=new TaskCompletionSource<bool>();
-    string active="",pending="",lastDisplay="";
-    bool ready=false,closed=false,fixtureVisible=true;
+    string active="",pending="",lastDisplay="",chatHome="";
+    bool ready=false,closed=false,fixtureVisible=true,hostVisible=true;
     int lastX=int.MinValue,lastY=int.MinValue;
     static readonly Regex descriptor=new Regex(@"^(\d{1,5})\.([A-Za-z0-9_-]{43})$");
     public EmbeddedChat(IntPtr parent,string profile,string scripts){
@@ -70,7 +106,7 @@ class EmbeddedChat : NativeWindow {
         Rect own;GetWindowRect(Handle,out own);
         if(own.Left!=host.Left||own.Top!=host.Top||own.Right-own.Left!=w||own.Bottom-own.Top!=h)
             SetWindowPos(Handle,IntPtr.Zero,0,0,w,h,0x0014); // NOZORDER | NOACTIVATE, own child only
-        bool visible=fixture!=""?fixtureVisible:IsWindowVisible(parent)&&!IsIconic(GetAncestor(parent,2));
+        bool visible=hostVisible&&(fixture!=""?fixtureVisible:IsWindowVisible(parent)&&!IsIconic(GetAncestor(parent,2)));
         if(controller!=null){
             var bounds=new Rectangle(0,0,w,h);
             if(controller.Bounds!=bounds)controller.Bounds=bounds;
@@ -104,10 +140,23 @@ class EmbeddedChat : NativeWindow {
         }
         core.Settings.AreDevToolsEnabled=false;core.Settings.AreHostObjectsAllowed=false;
         core.Settings.IsStatusBarEnabled=false;
-        core.NewWindowRequested+=(s,e)=>{e.Handled=true;Status("external-link","网页请求打开新窗口；请使用“在浏览器中打开”完成不支持的登录流程。");};
-        core.NavigationStarting+=(s,e)=>{Uri u;if(!Uri.TryCreate(e.Uri,UriKind.Absolute,out u)||u.Scheme!="https") {e.Cancel=true;Status("blocked","内嵌窗口只允许 HTTPS 网页。");}};
+        core.NewWindowRequested+=(s,e)=>{
+            e.Handled=true;
+            string action=ChatNavigationPolicy.Classify(chatHome,e.Uri,e.IsUserInitiated,false,true);
+            if(action=="external")OpenExternal(e.Uri);
+            else if(action=="login")Status("external-link","此登录流程需要新窗口，请使用“在浏览器中打开”继续；当前聊天保持不变。");
+            else Status("blocked","已阻止未经点击的弹窗或不支持的链接。");
+        };
+        core.NavigationStarting+=(s,e)=>{
+            string action=ChatNavigationPolicy.Classify(chatHome,e.Uri,e.IsUserInitiated,e.IsRedirected,false);
+            if(action=="embed")return;
+            e.Cancel=true;
+            if(action=="external")OpenExternal(e.Uri);
+            else Status("blocked","仅支持 HTTP / HTTPS 网页链接，当前聊天保持不变。");
+        };
         core.NavigationCompleted+=(s,e)=>{
-            if(!e.IsSuccess)Status("error","网页加载失败（"+e.WebErrorStatus+"），请检查网络或使用浏览器入口。");
+            if(!e.IsSuccess&&e.WebErrorStatus!=CoreWebView2WebErrorStatus.OperationCanceled)Status("error","网页加载失败（"+e.WebErrorStatus+"），请检查网络或使用浏览器入口。");
+            else if(!e.IsSuccess)return;
             else {SyncHost(false);Status("loaded","网页加载完成，请在下方登录或核对问题后发送。");}
         };
         core.ProcessFailed+=(s,e)=>Status("error","聊天渲染进程异常（"+e.ProcessFailedKind+"），请关闭内嵌聊天后重试。");
@@ -144,10 +193,11 @@ Object.defineProperty(window.chrome,'runtime',{configurable:true,value:{id:'pape
             string draft=await core.ExecuteScriptAsync("(()=>{const e=[...document.querySelectorAll('#prompt-textarea,textarea,[contenteditable=true][role=textbox],.ProseMirror[contenteditable=true],.ql-editor[contenteditable=true]')].find(e=>e.getClientRects().length);return !!(e&&(e.value||e.innerText||'').trim());})()");
             if(draft=="true")throw new Exception("当前对话已有草稿，已保留。请在下方网页发送或清空；若网页未显示，点击“重新显示”。");
         }
-        active=token;pending="";core.Navigate(url);
+        active=token;pending="";chatHome=u.GetLeftPart(UriPartial.Authority);core.Navigate(url);
         Opened(url);
     }
     void Opened(string url){lock(Console.Out){Console.WriteLine(json.Serialize(new {state="opened",detail="正在加载聊天网页；请在此登录并核对问题后发送。",url=url}));Console.Out.Flush();}}
+    void OpenExternal(string url){lock(Console.Out){Console.WriteLine(json.Serialize(new {state="open-external",url=url,userInitiated=true}));Console.Out.Flush();}}
     async Task Probe(){
         SyncHost(false);
         Console.WriteLine(json.Serialize(new {state="probe",detail="probe",attached=GetParent(Handle)==parent,controllerVisible=controller.IsVisible,
@@ -257,6 +307,7 @@ Object.defineProperty(window.chrome,'runtime',{configurable:true,value:{id:'pape
                             string kind=Convert.ToString(command["type"]);
                             if(kind=="close")host.Close();
                             else if(kind=="sync-host")host.SyncHost(true);
+                            else if(kind=="host-visibility"){host.hostVisible=Convert.ToBoolean(command["visible"]);host.SyncHost(false);}
                             else if(kind=="adapter-action")await host.Adapter(Convert.ToString(command["action"]));
                             else if(kind=="fixture-probe"&&host.fixture!="")await host.Probe();
                             else if(kind=="fixture-visibility"&&host.fixture!=""){host.fixtureVisible=Convert.ToBoolean(command["visible"]);host.SyncHost(false);}

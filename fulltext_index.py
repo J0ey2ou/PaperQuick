@@ -216,11 +216,19 @@ class FulltextIndex:
         finally:lib.close()
         return values
 
-    def _inventory(self, project=None, rid=None, attachment_id=None):
+    def _inventory(self, project=None, rid=None, attachment_id=None, *, include_segments=True):
         lib = Library(self.root)
         try:
-            records = lib.records(project, summary=True)
-            if rid:records = [record for record in records if record['id'] == rid]
+            if attachment_id and not rid:
+                row = lib.db.execute('SELECT paper FROM attachments WHERE id=?', (attachment_id,)).fetchone()
+                if not row:return []
+                rid = row[0]
+            records = lib.records(project, summary=True, rid=rid)
+            notes = {}
+            if include_segments and not attachment_id and records:
+                notes = {row[0]: row for row in lib.db.execute(
+                    "SELECT id,json_extract(data,'$.notes'),json_extract(data,'$.annotations') FROM papers WHERE id IN (SELECT value FROM json_each(?))",
+                    (json.dumps([record['id'] for record in records]),))}
             result = []
             for record in records:
                 for attachment in record['attachments']:
@@ -230,10 +238,14 @@ class FulltextIndex:
                                        title=display_name(record), label=attachment.get('label') or Path(attachment['path']).name,
                                        path=attachment['path'], source='正文' if attachment.get('role') == 'primary' else '笔记附件' if attachment.get('role') == 'note' else '附件'))
                 if attachment_id:continue
-                row = lib.db.execute("SELECT json_extract(data,'$.notes'),json_extract(data,'$.annotations') FROM papers WHERE id=?", (record['id'],)).fetchone()
-                annotations = json.loads(row[1] or '[]')
+                if not include_segments:
+                    result.append(dict(key='record:' + record['id'], paper=record['id'], attachment=None,
+                                       title=display_name(record), label='书目信息 / 笔记 / 批注', path='', source='笔记'))
+                    continue
+                row = notes[record['id']]
+                annotations = json.loads(row[2] or '[]')
                 segments = [{'text': ' '.join(str(record.get(field) or '') for field in ('title', 'authors', 'year', 'doi', 'venue', 'abstract', 'keywords', 'tags')), 'source': '书目信息', 'locator_kind': 'record', 'page': None, 'paragraph': None, 'origin': 'record'},
-                            {'text': row[0] or '', 'source': '笔记', 'locator_kind': 'note', 'page': None, 'paragraph': None, 'origin': 'note'}]
+                            {'text': row[1] or '', 'source': '笔记', 'locator_kind': 'note', 'page': None, 'paragraph': None, 'origin': 'note'}]
                 for annotation in annotations:
                     segments.append({'text': '\n'.join(str(annotation.get(field) or '') for field in ('quote', 'text')), 'source': '批注', 'locator_kind': 'annotation', 'page': annotation.get('page'), 'paragraph': None, 'origin': annotation.get('attachment') or ''})
                 result.append(dict(key='record:' + record['id'], paper=record['id'], attachment=None,
@@ -255,7 +267,7 @@ class FulltextIndex:
         with cancellable_lock(self.lock, cancel), self._db() as db:
             inventory = self._inventory(project, rid, attachment_id)
             # Remove deleted items only within the requested scope; unrelated indices stay intact.
-            live = {item['key'] for item in self._inventory()}
+            live = {item['key'] for item in (inventory if not (project or rid or attachment_id) else self._inventory(include_segments=False))}
             for row in db.execute('SELECT key FROM documents').fetchall():
                 if row['key'] not in live:
                     db.execute('DELETE FROM segments WHERE document=?', (row['key'],))
@@ -316,8 +328,12 @@ class FulltextIndex:
         return result
 
     def coverage(self, project=None, rid=None, attachment_id=None):
-        inventory = self._inventory(project, rid, attachment_id)
-        with self._db() as db:states = {row['key']: dict(row) for row in db.execute('SELECT * FROM documents')}
+        return self._coverage(self._inventory(project, rid, attachment_id, include_segments=False))
+
+    def _coverage(self, inventory):
+        keys = json.dumps([item['key'] for item in inventory if item['attachment']])
+        with self._db() as db:
+            states = {row['key']: dict(row) for row in db.execute('SELECT * FROM documents WHERE key IN (SELECT value FROM json_each(?))', (keys,))}
         results = []
         for item in inventory:
             if not item['attachment']:continue
@@ -335,9 +351,10 @@ class FulltextIndex:
         terms = str(query).strip().split()
         if not terms:return []
         if len(terms) > 12 or len(query) > 500:raise ValueError('请输入不超过 500 字、12 个关键词。')
-        inventory = self._inventory(project, rid, attachment_id)
+        inventory = self._inventory(project, rid, attachment_id, include_segments=False)
         live = {item['key']: item for item in inventory}
-        allowed = {item['attachment'] for item in self.coverage(project, rid, attachment_id) if item['status'] in ('complete', 'partial', 'empty')}
+        allowed = {item['attachment'] for item in self._coverage(inventory) if item['status'] in ('complete', 'partial', 'empty')}
+        if not live:return []
         arguments = []
         where = ["d.status IN ('complete','partial','empty')"]
         if self.fts and all(len(term) >= 3 for term in terms):
@@ -349,6 +366,8 @@ class FulltextIndex:
                 arguments.append('%' + term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%')
         if rid:where.append('d.paper=?');arguments.append(rid)
         if attachment_id:where.append('d.attachment=?');arguments.append(attachment_id)
+        if project:
+            where.append('d.key IN (SELECT value FROM json_each(?))');arguments.append(json.dumps(list(live)))
         sql = 'SELECT s.*,d.paper,d.attachment,d.title,d.label,d.path,d.sha FROM segments s JOIN documents d ON d.key=s.document WHERE ' + ' AND '.join(where) + ' ORDER BY d.title,s.page,s.paragraph,s.id'
         results = []
         with self._db() as db:

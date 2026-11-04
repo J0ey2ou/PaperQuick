@@ -9,6 +9,18 @@ from reading_resume import ReadingResumeStore
 
 
 class ReaderActions:
+    def share_reading(self):
+        if not self.rid:
+            self.status.set('请先打开要分享的文献。');return
+        self.save_notes()
+        from library_core import Library
+        from reading_share import paper_share_data
+        from reading_share_ui import ShareDialog
+        lib=Library(self.directory)
+        try:data=paper_share_data(lib,self.rid)
+        finally:lib.close()
+        ShareDialog(self.frame,data)
+
     def reading_actions_state(self):
         self.resume_store = ReadingResumeStore(self.directory)
         self.search_window = None
@@ -23,7 +35,7 @@ class ReaderActions:
 
     def reading_actions_widgets(self):
         bar = ttk.Frame(self.frame, padding=(24, 0, 24, 8))
-        bar.pack(fill='x', before=self.body)
+        if not self.compact:bar.pack(fill='x', before=self.body)
         self.reading_actions_bar = bar
         ttk.Button(bar, text='文内查找  Ctrl+F', command=self.search_document, style='Compact.TButton').pack(side='left')
         ttk.Button(bar, text='选文存为证据卡', command=self.capture_evidence, style='Compact.TButton').pack(side='left', padx=8)
@@ -111,7 +123,8 @@ class ReaderActions:
                 value.update(page=page, fraction=max(0, min(1, (top - y + 18) / max(1, height))), x_fraction=self.canvas.xview()[0])
         else:return
         if len(self.splitter.panes()) > 1 and not self.comparison and self.splitter.winfo_width() > 100:
-            value['split'] = self.splitter.sashpos(0) / self.splitter.winfo_width()
+            span=self.splitter.winfo_height() if self.compact else self.splitter.winfo_width()
+            value['split'] = self.splitter.sashpos(0) / max(1,span)
         if value == self._resume_saved and not force:return
         try:
             self.resume_store.save(self.rid, self.attachment_id, **value)
@@ -126,7 +139,8 @@ class ReaderActions:
             self.splitter.forget(self.notes_panel);self.notes_visible = False
         if self.splitter.winfo_width() <= 100:return
         if self.notes_visible and len(self.splitter.panes()) > 1:
-            self.splitter.sashpos(0, round(self.splitter.winfo_width() * saved['split']))
+            span=self.splitter.winfo_height() if self.compact else self.splitter.winfo_width()
+            self.splitter.sashpos(0, round(span * saved['split']))
         self._pending_resume_layout = None
 
     def apply_reading_target(self):

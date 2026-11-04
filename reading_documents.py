@@ -67,6 +67,7 @@ def locate_word_comments(comments, path):
     import re
     clean=lambda s:re.sub(r'\s+','',s)
     unmatched=[c for c in comments if c.get('page') is None];texts=[]
+    if not unmatched:return comments
     with _LOCK,pdfium().PdfDocument(path) as document:
         for i in range(len(document)):
             page=document[i]

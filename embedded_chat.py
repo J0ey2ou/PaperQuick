@@ -8,18 +8,20 @@ import sys
 import tkinter as tk
 from tkinter import ttk
 from app_version import VERSION
+from web_links import open_web_link
 
 
 class EmbeddedChat:
     def __init__(self,panel):
-        self.panel=panel;self.reader=panel.reader;self.process=None;self.provider=None;self.events=queue.Queue()
+        self.panel=panel;self.reader=panel.reader;self.process=None;self.provider=None;self.events=queue.Queue();self._visible=None
         self.tab=ttk.Frame(self.reader.notebook);self.reader.notebook.add(self.tab,text='聊天网页')
         bar=ttk.Frame(self.tab);bar.pack(fill='x',pady=4)
         self.status=tk.StringVar(value='首次在此登录，登录信息保存在本机独立配置中。')
         self.status_label=ttk.Label(bar,textvariable=self.status,wraplength=360,style='Muted.TLabel')
         self.status_label.pack(fill='x')
         bar.bind('<Configure>',lambda event:self.status_label.configure(wraplength=max(180,event.width-8)),add='+')
-        buttons=ttk.Frame(bar);buttons.pack(fill='x',pady=4)
+        from ui_widgets import flow_bar
+        buttons=ttk.Frame(bar);buttons.pack(fill='x',pady=4);flow_bar(buttons,gap=3)
         style=ttk.Style(self.tab);style.configure('Chat.TButton',padding=(6,3),width=0);style.configure('Chat.TMenubutton',padding=(6,3),width=0)
         for column,(label,command) in enumerate((('重试准备',lambda:self.action('retry')),('绑定对话',lambda:self.action('bind')),('回存选中',lambda:self.action('reply')),('笔记',lambda:self.reader.notebook.select(self.panel.frame)))):
             ttk.Button(buttons,text=label,style='Chat.TButton',command=command).grid(row=0,column=column,padx=(0,3),sticky='ew')
@@ -28,7 +30,9 @@ class EmbeddedChat:
         for label,command in (('在浏览器中打开',self.external),('重新显示',self.reveal),('关闭内嵌聊天',self.close)):menu.add_command(label=label,command=command)
         buttons.columnconfigure(4,weight=1)
         self.host=tk.Frame(self.tab,bg='#ffffff',width=380,height=600);self.host.pack(fill='both',expand=True)
-        self.host.bind('<Map>',lambda event:self._sync_display(),add='+')
+        self.host.bind('<Map>',lambda event:self.sync_visibility(),add='+')
+        self.host.bind('<Unmap>',lambda event:self.sync_visibility(False),add='+')
+        self.reader.notebook.bind('<<NotebookTabChanged>>',lambda event:self.sync_visibility(),add='+')
 
     def open(self,url,provider):
         if os.name!='nt':raise ValueError('当前内嵌网页仅支持 Windows；Mac 可继续使用网页账号或 API 模式。')
@@ -56,12 +60,18 @@ class EmbeddedChat:
         self.process.stdin.write(json.dumps({'type':'navigate','url':url})+'\n');self.process.stdin.flush()
         self.pending_url=url
         self.rid=self.reader.rid
+        self.sync_visibility(force=True)
         self.status.set('正在加载聊天网页；请在此登录并核对问题后发送。')
 
     def poll(self):
         try:
             while True:
                 event=self.events.get_nowait()
+                if event.get('state')=='open-external':
+                    if event.get('userInitiated') is True:
+                        try:open_web_link(event.get('url'));self.status.set('已在默认浏览器打开链接，当前聊天保持不变。')
+                        except (ValueError,OSError) as exc:self.status.set(str(exc))
+                    continue
                 if event.get('state')=='opened' and event.get('url'):self.url=event['url']
                 if event.get('detail'):self.status.set(event['detail'])
                 if event.get('state')=='display-state' and getattr(self,'diagnostic_path',None):
@@ -83,6 +93,26 @@ class EmbeddedChat:
             try:self.process.stdin.write('{"type":"sync-host"}\n');self.process.stdin.flush();return True
             except (OSError,ValueError):pass
         return False
+
+    def sync_visibility(self, visible=None, force=False):
+        """Synchronize only our owned view; never raise a window or navigate."""
+        try:
+            visible = bool(visible is not False and self.host.winfo_viewable()
+                           and self.reader.notebook.select() == str(self.tab)
+                           and (not hasattr(self, 'rid') or self.rid == getattr(self.reader, 'rid', None)))
+        except tk.TclError:
+            visible = False
+        if not self.process or self.process.poll() is not None:
+            self._visible = None
+            return False
+        if not force and visible == self._visible:
+            return True
+        try:
+            self.process.stdin.write(json.dumps({'type':'host-visibility','visible':visible})+'\n')
+            self.process.stdin.flush();self._visible=visible
+            return True
+        except (OSError,ValueError):
+            return False
 
     def action(self,action):
         if action not in ('retry','bind','reply'):return
@@ -109,7 +139,7 @@ class EmbeddedChat:
         if self.process:
             try:self.process.stdin.write('{"type":"close"}\n');self.process.stdin.flush();self.process.stdin.close()
             except (OSError,ValueError):pass
-            self.process=None;self.provider=None
+            self.process=None;self.provider=None;self._visible=None
         try:
             self.reader.notebook.select(self.panel.frame);self.reader.notebook.hide(self.tab)
         except tk.TclError:pass

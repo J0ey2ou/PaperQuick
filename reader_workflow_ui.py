@@ -103,6 +103,7 @@ class ReaderWorkflow:
             try:
                 with Image.open(path) as source:image=source.copy()
             except OSError as exc:messagebox.showerror('图片未打开',str(exc),parent=self.frame);return
+        self.prepare_note_edit()
         image=image.copy()
         factor=min(1,2400/image.width,(24000000/(image.width*image.height))**.5)
         if factor<1:image=image.resize((max(1,round(image.width*factor)),max(1,round(image.height*factor))))
@@ -192,6 +193,7 @@ class ReaderWorkflow:
 
     def insert_note_citation(self):
         if not self.rid:return
+        self.prepare_note_edit()
         lib=Library(self.directory)
         try:record=lib.get(self.rid)
         finally:lib.close()
@@ -265,6 +267,8 @@ class ReaderWorkflow:
         if self.path:self.render()
 
     def toggle_focus(self):
+        if self.compact:
+            self.toggle_notes();return
         self.focus_mode=not self.focus_mode
         if self.focus_mode:
             self.header.pack_forget();self.controls_host.pack_forget();self.focus_bar.pack(fill='x',before=self.body)
@@ -559,13 +563,18 @@ class ReaderWorkflow:
         self.canvas.pack_forget();self.vertical_scroll.pack_forget();self.horizontal_scroll.pack_forget()
         if not self.text_view:
             self.text_panel=ttk.Frame(self.viewer)
-            self.document_edit_bar=ttk.Frame(self.text_panel,padding=(8,5))
-            for label,command in [('保存正文  Ctrl+S',self.save_document),('撤销',lambda:self.undo_document(False)),('重做',lambda:self.undo_document(True)),('分页预览',self.show_paged_view)]:
-                ttk.Button(self.document_edit_bar,text=label,command=command,style='Compact.TButton').pack(side='left',padx=(0,6))
-            from ui_widgets import flow_bar
-            flow_bar(self.document_edit_bar)
-            self.text_view=tk.Text(self.text_panel,wrap='word',undo=True,font=(FONT,13),padx=28,pady=24,bg='#f7f8fb',fg='#263343',insertbackground='#245faa',exportselection=False)
-            scroll=ttk.Scrollbar(self.text_panel,command=self.text_view.yview);scroll.pack(side='right',fill='y');self.text_view.configure(yscrollcommand=scroll.set);self.text_view.pack(fill='both',expand=True)
+            if self.compact:
+                from icon_toolbar import IconToolbar
+                self.document_edit_bar=IconToolbar(self.text_panel)
+                for icon,label,command in [('save','保存原文  Ctrl+S',self.save_document),('previous','撤销',lambda:self.undo_document(False)),('next','重做',lambda:self.undo_document(True)),('document','返回分页阅读',self.show_paged_view)]:self.document_edit_bar.add(icon,label,command)
+            else:
+                self.document_edit_bar=ttk.Frame(self.text_panel,padding=(8,5))
+                for label,command in [('保存正文  Ctrl+S',self.save_document),('撤销',lambda:self.undo_document(False)),('重做',lambda:self.undo_document(True)),('分页预览',self.show_paged_view)]:
+                    ttk.Button(self.document_edit_bar,text=label,command=command,style='Compact.TButton').pack(side='left',padx=(0,6))
+                from ui_widgets import flow_bar
+                flow_bar(self.document_edit_bar)
+            self.text_view=tk.Text(self.text_panel,wrap='word',undo=True,font=(FONT,13),padx=8 if self.compact else 28,pady=8 if self.compact else 24,bg='#f7f8fb',fg='#263343',insertbackground='#245faa',exportselection=False)
+            scroll=ttk.Scrollbar(self.text_panel,command=self.text_view.yview);self.text_scroll=scroll;scroll.pack(side='right',fill='y');self.text_view.configure(yscrollcommand=scroll.set);self.text_view.pack(fill='both',expand=True)
             self.text_view.bind('<Button-3>',self.reading_context);self.text_view.bind('<<Modified>>',self.document_changed)
             self.text_view.bind('<Control-s>',lambda e:self.save_document());self.text_view.bind('<Control-S>',lambda e:self.save_document())
         if editable:self.document_edit_bar.pack(fill='x',before=self.text_view)
@@ -581,6 +590,8 @@ class ReaderWorkflow:
         self.document_changed()
 
     def show_paged_view(self):
+        if self.document_job:
+            self.status.set('原文正在保存或准备，请完成后再切换分页阅读。');return
         self.document_changed()
         if self.word_editing and self.editor_dirty:
             if not messagebox.askyesno('尚未保存','放弃本次原文修改并返回分页阅读？',parent=self.frame):return

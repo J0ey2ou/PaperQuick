@@ -1,4 +1,8 @@
 """文献直达 Windows 桌面界面。"""
+import sys
+if __name__=='__main__' and len(sys.argv)==3 and sys.argv[1]=='--verify-reading-share-bundle':
+    from pathlib import Path as _VerifyPath
+    _VerifyPath(sys.argv[2]).with_suffix('.progress.txt').write_text('entry\n',encoding='utf-8')
 import ctypes
 import json
 import os
@@ -151,6 +155,7 @@ class App(WorkspaceAppMixin):
         root.protocol('WM_DELETE_WINDOW',self.close)
         from update_ui import UpdateController
         self.updater=UpdateController(root,app_dir(),self.config_path,self.status.set)
+        if getattr(self.preferences,'warning',''):self.status.set(self.preferences.warning)
 
     def search_selection(self):
         if self.busy:
@@ -925,7 +930,15 @@ def main():
 
 
 if __name__ == "__main__":
-    if len(sys.argv)==3 and sys.argv[1].startswith('--verify-'):
+    if len(sys.argv)==3 and sys.argv[1]=='--verify-reading-share-bundle':
+        try:
+            from reading_upgrade_check import run
+            run(sys.argv[2])
+        except Exception:
+            import traceback
+            Path(sys.argv[2]).write_text(json.dumps({'passed':False,'error':traceback.format_exc()},ensure_ascii=False,indent=2),'utf-8')
+            sys.exit(1)
+    elif len(sys.argv)==3 and sys.argv[1].startswith('--verify-'):
         try:main()
         except Exception:
             import traceback

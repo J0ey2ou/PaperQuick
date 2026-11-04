@@ -69,6 +69,16 @@ def digest(path):
             h.update(block)
     return h.hexdigest()
 
+
+class _HashingWriter:
+    def __init__(self, stream, digest):
+        self.stream, self.digest = stream, digest
+
+    def write(self, block):
+        count = self.stream.write(block)
+        self.digest.update(block[:count])
+        return count
+
 def attachment_kind(attachment):
     """Read both migrated rows and older attachment dictionaries."""
     if attachment.get('url') or attachment.get('kind') == 'link':
@@ -221,6 +231,7 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
         self._migrate_attachments()
         self.workflow_schema()
         self.organization_schema()
+        self._summary_schema()
         if not self.projects():
             self.create_project('未分类')
 
@@ -242,6 +253,41 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
 
     def close(self):
         self.db.close()
+
+    def _summary_schema(self):
+        """Keep list data small, including writes made by other connections/tools.
+
+        The original papers layout stays intact for backup/undo compatibility.
+        Triggers update the projection in the same transaction as every write.
+        """
+        schema = '''
+        CREATE TABLE IF NOT EXISTS paper_summaries(id TEXT PRIMARY KEY,data TEXT,primary_project TEXT,updated REAL);
+        CREATE INDEX IF NOT EXISTS paper_summaries_updated ON paper_summaries(updated DESC);
+        CREATE INDEX IF NOT EXISTS attachments_paper ON attachments(paper);
+        CREATE INDEX IF NOT EXISTS attachments_sha ON attachments(sha);
+        CREATE INDEX IF NOT EXISTS memberships_project ON memberships(project,paper);
+        CREATE INDEX IF NOT EXISTS papers_doi ON papers(json_extract(data,'$.doi'));
+        CREATE TRIGGER IF NOT EXISTS paper_summaries_insert AFTER INSERT ON papers BEGIN
+          INSERT OR REPLACE INTO paper_summaries VALUES(new.id,
+            json_remove(new.data,'$.text','$.notes','$.references','$.annotations','$.note_images','$.note_styles'),new.primary_project,new.updated);
+        END;
+        CREATE TRIGGER IF NOT EXISTS paper_summaries_update AFTER UPDATE ON papers BEGIN
+          DELETE FROM paper_summaries WHERE id=old.id AND old.id<>new.id;
+          INSERT OR REPLACE INTO paper_summaries VALUES(new.id,
+            json_remove(new.data,'$.text','$.notes','$.references','$.annotations','$.note_images','$.note_styles'),new.primary_project,new.updated);
+        END;
+        CREATE TRIGGER IF NOT EXISTS paper_summaries_delete AFTER DELETE ON papers BEGIN
+          DELETE FROM paper_summaries WHERE id=old.id;
+        END;
+        '''
+        # Install all triggers and backfill under the same writer lock. An older
+        # process can still write papers, so it must never observe half-installed
+        # triggers (e.g. INSERT available before DELETE during first migration).
+        with self.db:
+            self.db.executescript('BEGIN IMMEDIATE;\n' + schema)
+            if not self.db.execute("SELECT 1 FROM config WHERE key='paper_summary_schema'").fetchone():
+                self.db.execute("INSERT OR REPLACE INTO paper_summaries SELECT id,json_remove(data,'$.text','$.notes','$.references','$.annotations','$.note_images','$.note_styles'),primary_project,updated FROM papers")
+                self.db.execute("INSERT OR REPLACE INTO config VALUES('paper_summary_schema','1')")
 
     def log(self, action, detail):
         self.db.execute('INSERT INTO events VALUES(?,?,?)', (time.time(), action, json.dumps(detail, ensure_ascii=False)))
@@ -281,18 +327,23 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
             self.db.execute('INSERT INTO projects(id,name,folder,parent) VALUES(?,?,?,?)', (pid, name, folder, parent or ''))
         return pid
 
-    def records(self, project=None, summary=False):
+    def records(self, project=None, summary=False, rid=None):
         # List pages never load full document text, images, or long annotations.
-        data="json_remove(p.data,'$.text','$.notes','$.references','$.annotations','$.note_images','$.note_styles') AS data" if summary else 'p.data'
-        query = 'SELECT p.id,p.primary_project,p.updated,'+data+' FROM papers p'
-        args = ()
+        query = 'SELECT p.id,p.primary_project,p.updated,p.data FROM '+('paper_summaries' if summary else 'papers')+' p'
+        args = [];where = []
         if project:
-            args = tuple(self.project_descendants(project))
-            query += ' WHERE p.id IN (SELECT paper FROM memberships WHERE project IN (' + ','.join('?' for _ in args) + '))'
+            projects = tuple(self.project_descendants(project))
+            where.append('p.id IN (SELECT paper FROM memberships WHERE project IN (' + ','.join('?' for _ in projects) + '))')
+            args.extend(projects)
+        if rid:
+            where.append('p.id=?');args.append(rid)
+        if where:query += ' WHERE '+' AND '.join(where)
         rows=self.db.execute(query + ' ORDER BY p.updated DESC', args).fetchall()
         memberships=collections.defaultdict(list);attachments=collections.defaultdict(list)
-        for item in self.db.execute('SELECT * FROM memberships'):memberships[item['paper']].append(item['project'])
-        for item in self.db.execute('SELECT * FROM attachments ORDER BY rowid'):attachments[item['paper']].append(dict(item))
+        scope=' WHERE paper IN (SELECT value FROM json_each(?))' if project or rid else ''
+        scope_args=(json.dumps([row['id'] for row in rows]),) if scope else ()
+        for item in self.db.execute('SELECT * FROM memberships'+scope,scope_args):memberships[item['paper']].append(item['project'])
+        for item in self.db.execute('SELECT * FROM attachments'+scope+' ORDER BY rowid',scope_args):attachments[item['paper']].append(dict(item))
         return [self._record(row,memberships,attachments) for row in rows]
 
     def recent_read(self, limit=50):
@@ -300,7 +351,7 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
         return [dict(row) for row in self.db.execute('''
             SELECT id, COALESCE(NULLIF(json_extract(data, '$.display_name'), ''), json_extract(data, '$.title')) AS title,
                    CAST(json_extract(data, '$.last_read') AS REAL) AS last_read
-            FROM papers WHERE CAST(json_extract(data, '$.last_read') AS REAL)>0
+            FROM paper_summaries WHERE CAST(json_extract(data, '$.last_read') AS REAL)>0
             ORDER BY last_read DESC, id LIMIT ?
         ''', (max(0, int(limit)),))]
 
@@ -494,7 +545,7 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
         role = 'supplement' if primary and (self.root / primary['path']).is_file() else 'primary'
         return self._add_attachment(rid, source, '', role, extract=extract)
 
-    def _add_attachment(self, rid, source, label, role, extract=False, expected_sha=None):
+    def _add_attachment(self, rid, source, label, role, extract=False, expected_sha=None, metadata=None):
         if role not in ('primary', 'supplement', 'note'):
             raise ValueError('附件类型必须为正文或补充附件。')
         record = self.get(rid)
@@ -504,20 +555,23 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
         kind = attachment_kind({'path': str(source)})
         if role == 'primary' and kind not in ('pdf', 'docx', 'doc', 'txt', 'md'):
             raise ValueError('请选择 PDF、Word 或 TXT 文档作为正文。')
-        metadata = {}
+        supplied_metadata = metadata is not None
+        metadata = dict(metadata or {})
         if kind == 'pdf':
             with source.open('rb') as stream:
                 if b'%PDF-' not in stream.read(1024):
                     raise ValueError('文件不是有效 PDF。')
-            if extract and role == 'primary':
+            if extract and role == 'primary' and not supplied_metadata:
                 metadata = pdf_metadata(source)
-        elif kind in ('docx', 'doc', 'txt', 'md'):
+        elif kind in ('docx', 'doc', 'txt', 'md') and not supplied_metadata:
             metadata = document_metadata(source)
-        sha = digest(source)
-        if expected_sha is not None and sha != expected_sha:
-            raise ValueError('导入期间原文件发生变化，请保存文件后重新导入。')
+        # A normal import already validated the source after metadata extraction.
+        # Validate its bytes again while copying, avoiding another separate read.
+        sha = expected_sha if expected_sha is not None else digest(source)
         existing = self.db.execute('SELECT * FROM attachments WHERE paper=? AND sha=?', (rid, sha)).fetchone()
         if existing:
+            if expected_sha is not None and digest(source) != expected_sha:
+                raise ValueError('导入期间原文件发生变化，请保存文件后重新导入。')
             restored = self._restore_attachment(dict(existing), source)
             if role == 'primary' and existing['role'] != 'primary':
                 self.set_primary_attachment(rid, existing['id'])
@@ -542,8 +596,9 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
                     continue
                 with source.open('rb') as input_file, dest.open('xb') as output:
                     created = True
-                    shutil.copyfileobj(input_file, output)
-                if digest(dest) != sha:
+                    copied = hashlib.sha256()
+                    shutil.copyfileobj(input_file, _HashingWriter(output, copied))
+                if copied.hexdigest() != sha or digest(dest) != sha:
                     raise ValueError('复制期间原文件发生变化，请保存文件后重新导入。')
                 break
             except FileExistsError:
@@ -637,7 +692,7 @@ class Library(LibraryWorkflow, LibraryOrganization, ImportIdentity):
         try:
             primary = self.primary_attachment(rid)
             role = 'supplement' if primary and self._managed_path(primary['path']).is_file() else 'primary'
-            path = self._add_attachment(rid, source, '', role, extract=role == 'primary', expected_sha=sha)
+            path = self._add_attachment(rid, source, '', role, extract=role == 'primary', expected_sha=sha, metadata=metadata)
         except Exception:
             # A failed copy must not leave an empty entry that later imports match.
             # Preserve any intervening user edit instead of deleting it.

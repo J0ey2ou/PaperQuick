@@ -161,6 +161,25 @@ class AIStorageTests(unittest.TestCase):
 
 
 class AIHiddenUITests(unittest.TestCase):
+    def test_answer_urls_are_tagged_and_text_selection_never_opens_a_browser(self):
+        from types import SimpleNamespace
+        p=self.panel;url='https://www.thelancet.com/article/PIIS0140-6736(25)01037-X/fulltext'
+        p.answer.insert('1.0','📚 Evidence [Lancet]('+url+').')
+        p.refresh_answer_links()
+        self.assertEqual(list(p.answer_links.values()),[url])
+        ranges=p.answer.tag_ranges('answer-web-link')
+        self.assertEqual(p.answer.get(ranges[0],ranges[1]),url)
+        with patch('webbrowser.open',return_value=True) as browser:
+            p.open_answer_link(url);browser.assert_called_once_with(url);browser.reset_mock()
+            p.answer.tag_add('sel','1.0','end-1c');p.link_press(SimpleNamespace(x=10,y=10))
+            p.link_release(SimpleNamespace(x=10,y=10));browser.assert_not_called()
+            p.answer.tag_remove('sel','1.0','end');p.link_press(SimpleNamespace(x=10,y=10))
+            p.link_release(SimpleNamespace(x=40,y=10));browser.assert_not_called()
+            index=p.answer.index
+            with patch.object(p.answer,'index',side_effect=lambda value:ranges[0] if str(value).startswith('@') else index(value)):
+                p.link_press(SimpleNamespace(x=10,y=10));p.link_release(SimpleNamespace(x=10,y=10))
+            browser.assert_called_once_with(url)
+
     def setUp(self):
         AIStorageTests.setUp(self);self.root=tk.Tk();self.root.withdraw()
         from reader_ui import ReaderPage
@@ -201,6 +220,42 @@ class AIHiddenUITests(unittest.TestCase):
             p.save_note();p.save_note()
         record=self.lib.get(self.rid);self.assertEqual(record['notes'].count('Completed fixture answer'),1)
         self.assertEqual(len([a for a in record['annotations'] if a.get('kind')=='AI 笔记']),1)
+
+    def test_child_ai_save_preserves_parent_draft_and_parent_can_continue_editing(self):
+        from reader_ui import ReaderPage
+        parent=self.reader
+        child=ReaderPage(self.root,self.lib.root,lambda *args:None,lambda *args:None,compact=True)
+        try:
+            child.open(self.rid,record_read=False)
+            self.wait(lambda:not parent.loading and not child.loading)
+            parent.note_peers=[child];child.note_peers=[parent]
+            parent.notes.insert('end','Parent unsaved draft');parent.dirty=True
+            panel=child.ai_panel
+            panel.answer_turn={'id':'shared-note-turn','rid':self.rid,'provider':'deepseek','anchor':dict(self.anchor),'question':'Explain'}
+            panel.answer.insert('1.0','Child AI answer')
+            panel.save_note()
+            for text in (parent.notes.get('1.0','end-1c'),child.notes.get('1.0','end-1c'),self.lib.get(self.rid)['notes']):
+                self.assertIn('Parent unsaved draft',text);self.assertEqual(text.count('Child AI answer'),1)
+            self.assertFalse(parent.dirty);self.assertFalse(child.dirty)
+            parent.prepare_note_edit();parent.notes.insert('end','\nParent continued editing');parent.dirty=True;parent.save_notes()
+            record=self.lib.get(self.rid)
+            for text in (record['notes'],child.notes.get('1.0','end-1c')):
+                self.assertIn('Parent unsaved draft',text);self.assertEqual(text.count('Child AI answer'),1);self.assertIn('Parent continued editing',text)
+            self.assertEqual(len([a for a in record['annotations'] if a.get('kind')=='AI 笔记']),1)
+        finally:
+            parent.note_peers=[];child.note_peers=[];child.close();child.frame.destroy()
+
+    def test_ai_save_stops_before_mutating_notes_when_peer_save_fails(self):
+        self.wait(lambda:not self.reader.loading)
+        panel=self.panel
+        panel.answer_turn={'id':'failed-peer-save','rid':self.rid,'provider':'deepseek','anchor':dict(self.anchor),'question':'Explain'}
+        panel.answer.insert('1.0','Must not overwrite notes')
+        before=self.reader.notes.get('1.0','end-1c')
+        with patch.object(self.reader,'prepare_note_edit',side_effect=OSError('fixture write failure')):
+            panel.save_note()
+        self.assertEqual(self.reader.notes.get('1.0','end-1c'),before)
+        self.assertEqual(self.lib.get(self.rid)['notes'],before)
+        self.assertIn('保存未完成',panel.status.get())
 
     def test_cancel_does_not_save_partial_or_allow_cross_document_notes(self):
         p=self.panel;p.mode.set('API');p.scope.set('仅选文');p.select()

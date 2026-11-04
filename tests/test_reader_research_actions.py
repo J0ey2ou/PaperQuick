@@ -33,13 +33,14 @@ class ReaderResearchActionTests(unittest.TestCase):
     def test_cross_page_selection_sets_locator_and_persists_note_citation(self):
         notes=tk.Text(self.root)
         selection={'page':1,'quote':'Selected evidence','regions':[{'page':1},{'page':2}]}
-        owner=SimpleNamespace(rid=self.rid,directory=self.lib.root,page=5,context_page=5,current_selection=lambda:selection,notes=notes,note_status=tk.StringVar(),dirty=False,save_notes=Mock())
+        owner=SimpleNamespace(rid=self.rid,directory=self.lib.root,page=5,context_page=5,current_selection=lambda:selection,notes=notes,note_status=tk.StringVar(),dirty=False,save_notes=Mock(),prepare_note_edit=Mock())
         owner.citation_locator=lambda:ReaderWorkflow.citation_locator(owner)
         self.assertEqual(owner.citation_locator(),'2–3')
         ReaderWorkflow.insert_note_citation(owner)
         content=notes.get('1.0','end')
         self.assertIn('Selected evidence',content);self.assertIn('第 2–3 页',content);self.assertIn('《paper》',content)
         owner.save_notes.assert_called_once()
+        owner.prepare_note_edit.assert_called_once()
         with patch('word_citation_ui.WordCitationsWindow') as dialog:
             owner.frame=self.root;ReaderWorkflow.insert_word_citation(owner)
             self.assertEqual(dialog.call_args.kwargs['locator'],'2–3')

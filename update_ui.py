@@ -1,6 +1,7 @@
 """Asynchronous settings controls for GitHub release updates."""
 import queue
 import threading
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
@@ -17,13 +18,27 @@ class UpdateController:
         self.automatic=tk.BooleanVar(master=root,value=prefs.get('check_updates_on_start',False))
         self.preview=tk.BooleanVar(master=root,value=prefs.get('receive_preview_updates',False))
         self.status=tk.StringVar(master=root,value=f'当前版本 {VERSION}。点击检查 GitHub 新版本。')
+        self.install_status=tk.StringVar(master=root,value='');self._reported_result=None
         self.automatic.trace_add('write',self.save_options);self.preview.trace_add('write',self.save_options)
         self.view=None;self.root.after(200,self.poll)
         if self.automatic.get():self.root.after(5000,self.check)
-        if prefs.get('last_seen_version')!=VERSION:
-            self.notify(f'已更新到 {VERSION}：新增标签与子课题、Word 参考文献同步、解读模板和设置内更新。')
-            try:save_preferences(config,{'last_seen_version':VERSION})
+        self.refresh_install_result()
+
+    def refresh_install_result(self, notify=True):
+        report=app_updates.latest_install_result(self.directory)
+        if not report:return
+        version=report['version'];stamp=datetime.fromtimestamp(report['completed_at']).strftime('%Y-%m-%d %H:%M')
+        if report['state']=='installed':
+            text=f'更新已完成，当前运行 v{VERSION}。' if version==VERSION else f'上次已安装 v{version or "未知版本"}；当前运行 v{VERSION}。'
+        else:
+            text=f'上次更新{("到 v"+version) if version else ""}未完成：{report["error"] or "请检查安装目录是否可写或仍有文件被占用。"}\n当前运行 v{VERSION}，可检查更新后重试。'
+        text=f'{stamp} · {text}';self.install_status.set(text)
+        prefs=load_preferences(self.config)
+        if notify and report['id']!=self._reported_result and prefs.get('last_seen_update_result')!=report['id']:
+            self.notify(text)
+            try:save_preferences(self.config,{'last_seen_update_result':report['id']})
             except OSError:pass
+        self._reported_result=report['id']
 
     def save_options(self,*_):
         try:save_preferences(self.config,{'check_updates_on_start':self.automatic.get(),'receive_preview_updates':self.preview.get()})
@@ -32,6 +47,8 @@ class UpdateController:
     def mount(self,parent):
         frame=ttk.LabelFrame(parent,text='软件更新',padding=12);frame.pack(fill='x',pady=12);self.view=frame
         ttk.Label(frame,textvariable=self.status,wraplength=760,style='Muted.TLabel').pack(fill='x')
+        self.refresh_install_result(notify=False)
+        ttk.Label(frame,textvariable=self.install_status,wraplength=760,style='Muted.TLabel',justify='left').pack(fill='x',pady=(4,0))
         bar=ttk.Frame(frame);bar.pack(fill='x',pady=8)
         ttk.Button(bar,text='检查更新',command=self.check).pack(side='left')
         ttk.Button(bar,text='下载并在退出后更新',command=self.download).pack(side='left',padx=8)

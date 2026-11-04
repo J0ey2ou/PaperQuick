@@ -4,6 +4,9 @@ import tempfile
 import threading
 import time
 import unittest
+import weakref
+import gc
+from concurrent.futures import Future
 from unittest.mock import Mock, patch
 
 from workspace_tasks import TaskManager
@@ -20,6 +23,47 @@ def wait_for(manager, task_id, statuses=('succeeded', 'failed', 'cancelled'), ti
 
 
 class TaskTests(unittest.TestCase):
+    def test_success_releases_captured_worker_and_runtime_references(self):
+        class Worker:
+            def __call__(self,context):return {'saved':True}
+        worker=Worker();reference=weakref.ref(worker)
+        task_id=self.manager.submit('done','Completed job',worker);del worker
+        self.assertEqual(wait_for(self.manager,task_id)['status'],'succeeded')
+        end=time.monotonic()+3
+        while time.monotonic()<end and (reference() is not None or task_id in self.manager._futures):
+            gc.collect();time.sleep(.01)
+        self.assertIsNone(reference())
+        for collection in (self.manager._workers,self.manager._retry,self.manager._events,self.manager._futures):
+            self.assertNotIn(task_id,collection)
+        self.assertEqual(self.manager.get_task(task_id)['result'],{'saved':True})
+
+    def test_already_finished_future_is_cleaned_after_registration(self):
+        def immediate(function,*args):
+            future=Future();function(*args);future.set_result(None);return future
+        with patch.object(self.manager.executor,'submit',side_effect=immediate):
+            task_id=self.manager.submit('done','Immediate job',lambda context:7)
+        self.assertEqual(self.manager.get_task(task_id)['result'],7)
+        self.assertNotIn(task_id,self.manager._futures)
+        self.assertNotIn(task_id,self.manager._workers)
+
+    def test_individual_status_lookup_does_not_copy_history(self):
+        task_id=self.manager.submit('one','One task',lambda context:{'value':7})
+        wait_for(self.manager,task_id)
+        with patch.object(self.manager,'list_tasks',side_effect=AssertionError('No full history scan')):
+            first=self.manager.get_task(task_id);first['result']['value']=99
+            self.assertEqual(self.manager.get_task(task_id)['result']['value'],7)
+            self.assertIsNone(self.manager.get_task('missing'))
+
+    def test_history_pages_keep_latest_order_and_all_records(self):
+        for index in range(250):
+            self.manager._tasks[str(index)]={'id':str(index),'kind':'sample','created':index,'status':'succeeded','metadata':{}}
+        first=self.manager.list_tasks(limit=100);last=self.manager.list_tasks(limit=100,offset=200)
+        self.assertEqual([task['id'] for task in first],[str(i) for i in range(249,149,-1)])
+        self.assertEqual([task['id'] for task in last],[str(i) for i in range(49,-1,-1)])
+        self.assertEqual(self.manager.task_count(),250);self.assertFalse(self.manager.has_active_tasks())
+        first[0]['metadata']['changed']=True
+        self.assertNotIn('changed',self.manager.get_task('249')['metadata'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -157,7 +201,6 @@ class TaskTests(unittest.TestCase):
         with patch.object(self.manager, '_save', side_effect=fail_completion):
             task_id = self.manager.submit('test', 'published output', lambda context: {'path': 'already-published'})
             finished = wait_for(self.manager, task_id)
-            self.manager._futures[task_id].result(timeout=5)
         self.assertEqual(finished['status'], 'succeeded')
         self.assertEqual(finished['result']['path'], 'already-published')
         self.assertIn('completion write failed', finished['error'])

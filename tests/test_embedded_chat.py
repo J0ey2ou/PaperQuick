@@ -108,7 +108,9 @@ window.pqFixtureSubmit=()=>{const turn=document.createElement('article');turn.da
             events=queue.Queue();process=None
             try:
                 environment=dict(os.environ,PAPERQUICK_EMBEDDED_FIXTURE=str(fixture),WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--disable-background-networking --disable-component-update --no-first-run')
-                process=subprocess.Popen([str(root_path/'embedded-browser/EmbeddedChat.exe'),str(parent.winfo_id()),str(folder/'profile'),str(root_path/'browser-extension')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace',creationflags=subprocess.CREATE_NO_WINDOW,env=environment)
+                binary=Path(os.environ.get('PAPERQUICK_EMBEDDED_TEST_BINARY',root_path/'embedded-browser/EmbeddedChat.exe')).resolve()
+                if not binary.is_relative_to(root_path):raise ValueError('Test component must be inside the workspace')
+                process=subprocess.Popen([str(binary),str(parent.winfo_id()),str(folder/'profile'),str(root_path/'browser-extension')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace',creationflags=subprocess.CREATE_NO_WINDOW,env=environment)
                 def read():
                     for line in process.stdout:events.put(json.loads(line))
                 threading.Thread(target=read,daemon=True).start()

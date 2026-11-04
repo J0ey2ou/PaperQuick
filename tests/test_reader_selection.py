@@ -129,14 +129,15 @@ class ReaderSelectionTests(unittest.TestCase):
         dc.layout[2]=(18,900,300,400)
         dc.cache={0:(Image.new('RGB',(300,400),'red'),first),2:(Image.new('RGB',(300,400),'blue'),last)}
         dc.selection=((0,0),(2,0));dc.selection_text={0:first,2:last}
-        with patch.object(dc,'move'),patch('reader_canvas.render_page_data',return_value=(Image.new('RGB',(300,400),'green'),middle)) as render:
+        with patch.object(dc,'move'),patch('reader_canvas.page_characters',return_value=middle) as text,patch('reader_canvas.render_page_data',return_value=(Image.new('RGB',(300,400),'green'),middle)) as render:
             dc.finish(self.event(0,0))
             self.assertEqual(r.last_selection['quote'],'First\nMiddle\nLast')
             image=dc.selection_image(r.last_selection)
             self.assertEqual(image.size,(90,152))
             self.assertEqual(image.getpixel((5,70)),(0,128,0))
             self.assertEqual(image.getpixel((5,140)),(0,0,255))
-            self.assertEqual(render.call_count,2)
+            text.assert_called_once_with(r.path,1)
+            self.assertEqual(render.call_count,1)
 
     def test_saved_long_note_image_keeps_lower_pages_and_does_not_resize_input(self):
         r=self.reader

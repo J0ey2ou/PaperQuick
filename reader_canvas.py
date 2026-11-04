@@ -1,17 +1,21 @@
 """Virtual continuous pages with a real PDF text-selection layer."""
 import bisect
-import threading
 from PIL import Image,ImageTk
-from pdf_reader_core import render_page_data,math_sqrt_limit
+from pdf_reader_core import render_page_data,math_sqrt_limit,file_version,page_characters
+from reader_render_queue import PageRenderQueue
 
 
 class DocumentCanvas:
     def __init__(self,reader):
         self.r=reader;self.canvas=reader.canvas;self.cache={};self.photos={};self.pending=set();self.layout={};self.tops=[];self.sign=None;self.job=None;self.selection=None;self.selection_text={};self.selecting=False
+        self.render_queue=PageRenderQueue(lambda path,page,scale:render_page_data(path,page,scale))
+        self.cache_limit=96*1024*1024
         self.canvas.bind('<Control-c>',lambda e:self.copy());self.canvas.bind('<Control-C>',lambda e:self.copy())
         self.canvas.bind('<Button-2>',lambda e:self.canvas.scan_mark(e.x,e.y));self.canvas.bind('<B2-Motion>',lambda e:self.canvas.scan_dragto(e.x,e.y,gain=1))
 
     def reset(self):
+        self.render_queue.cancel()
+        self.visible_pages=set()
         if getattr(self,'zoom_job',None):
             try:self.canvas.after_cancel(self.zoom_job)
             except Exception:pass
@@ -22,10 +26,14 @@ class DocumentCanvas:
             except Exception:pass
         self.job=None;self.cache={};self.photos={};self.pending=set();self.layout={};self.tops=[];self.sign=None;self.selection=None;self.selection_text={};self.selecting=False;self.canvas.delete('all')
 
-    def adopt(self,path,page,count,image,chars,sizes):
-        sign=(str(path),self.r.scale,self.r.generation,self.r.continuous.get())
+    def adopt(self,path,page,count,image,chars,sizes,version=None):
+        if version is not None and file_version(path)!=version:
+            self.r.status.set('文档已改变，请重新打开以刷新页面。');return
+        sign=(str(path),self.r.scale,self.r.generation,self.r.continuous.get(),version if version is not None else file_version(path))
         changed=sign!=self.sign;self.sign=sign
         if changed:
+            self.render_queue.cancel()
+            self.visible_pages=set()
             self.cache={};self.photos={};self.pending=set();self.selection=None;self.selection_text={};self.selecting=False;self.r.last_selection=None;self.r.selection_start=None;self.layout={};self.tops=[];self.canvas.delete('all')
             y=18
             pages=range(count) if self.r.continuous.get() else [page]
@@ -37,7 +45,7 @@ class DocumentCanvas:
                 y+=h+24
             self.canvas.configure(scrollregion=(0,0,max(x+w for x,y,w,h in self.layout.values())+18,y))
         elif not self.r.continuous.get() and page not in self.layout:
-            self.sign=None;return self.adopt(path,page,count,image,chars,sizes)
+            self.sign=None;return self.adopt(path,page,count,image,chars,sizes,version)
         self.receive(page,image,chars)
         if changed:self.goto(page)
         anchor=getattr(self,'zoom_anchor',None)
@@ -72,12 +80,15 @@ class DocumentCanvas:
 
     def receive(self,page,image,chars):
         if page not in self.layout:return
+        if self.sign and len(self.sign)>4 and self.sign[4] is not None and file_version(self.r.path)!=self.sign[4]:
+            self.pending.discard(page);self.r.status.set('文档已改变，请重新打开以刷新页面。');return
         self.pending.discard(page);self.cache[page]=(image,chars);self.photos[page]=ImageTk.PhotoImage(image,master=self.r.frame)
         if self.selecting:self.selection_text[page]=chars
         self.canvas.delete('image-'+str(page));x,y,w,h=self.layout[page]
         self.canvas.create_image(x,y,image=self.photos[page],anchor='nw',tags=('page-image','image-'+str(page)))
         self.r.photo=self.photos.get(self.r.page,self.photos[page]);self.r.draw_annotations()
         if self.selection:self.paint_selection()
+        self.trim_cache()
 
     def schedule(self):
         if self.job:
@@ -87,24 +98,37 @@ class DocumentCanvas:
 
     def load_visible(self):
         self.job=None
-        if self.r.closed or not self.layout:return
+        if self.r.closed or self.r.loading or not self.layout:return
         top=self.canvas.canvasy(0);bottom=self.canvas.canvasy(self.canvas.winfo_height());visible=[n for n,(x,y,w,h) in self.layout.items() if y+h>=top-160 and y<=bottom+160]
         current=self.page_at(30,top+80)
         if current is not None:
             self.r.page=current;self.r.page_input.set(str(current+1));self.r.image_size=self.layout[current][2:]
             self.r.page_label.set(f'第 {current+1} / {self.r.count} 页 · {round(self.r.scale*100)}%'+(' · 连续阅读' if self.r.continuous.get() else ''))
-        for n in visible:
-            if n in self.cache or n in self.pending:continue
-            self.pending.add(n);path=self.r.path;scale=self.r.scale;sign=self.sign;generation=self.r.generation;events=self.r.events
-            def job(page=n):
-                try:events.put(('canvas-page',generation,(sign,page,render_page_data(path,page,scale),None)))
-                except Exception as exc:events.put(('canvas-page',generation,(sign,page,None,str(exc))))
-            threading.Thread(target=job,daemon=True).start()
-        # Keep only visible pages and nearby pages; a long thesis stays bounded.
-        keep=set(visible)|{self.r.page}
+        # A single worker owns a bounded queue. Replace obsolete scroll work and
+        # render visible pages before the nearest neighbouring pages.
+        neighbours=[n for n in (self.r.page+1,self.r.page-1) if n in self.layout and n not in visible]
+        estimated=sum(self.layout[n][2]*self.layout[n][3]*8+1024*1024 for n in visible)
+        affordable=[]
+        for n in neighbours:
+            estimated+=self.layout[n][2]*self.layout[n][3]*8+1024*1024
+            if estimated<=self.cache_limit:affordable.append(n)
+        wanted=sorted(visible,key=lambda n:abs(n-self.r.page))+affordable
+        missing=[n for n in wanted if n not in self.cache]
+        self.pending=set(missing)
+        self.render_queue.request(self.r.path,self.r.scale,self.sign,self.r.generation,missing,self.r.events)
+        self.visible_pages=set(visible)
+        self.trim_cache()
+
+    def trim_cache(self):
+        keep=getattr(self,'visible_pages',set())|{self.r.page}
         if getattr(self.r,'selection_start',None):keep.add(self.r.selection_page)
-        for n in list(self.cache):
-            if n not in keep:
+        # PIL and Tk each retain a pixel copy. Keep a few recent pages only while
+        # they fit the byte budget; visible pages remain available for selection.
+        cost=lambda n:self.cache[n][0].width*self.cache[n][0].height*8+len(self.cache[n][1])*256
+        total=sum(cost(n) for n in self.cache)
+        for n in sorted(self.cache,key=lambda n:abs(n-self.r.page),reverse=True):
+            if n not in keep and (total>self.cache_limit or abs(n-self.r.page)>3):
+                total-=cost(n)
                 self.canvas.delete('image-'+str(n));self.cache.pop(n,None);self.photos.pop(n,None)
 
     def scrolled(self,*args):
@@ -160,7 +184,7 @@ class DocumentCanvas:
             chars=self.selection_text.get(n)
             if chars is None and n in self.cache:chars=self.cache[n][1]
             if chars is None and complete:
-                _,chars=render_page_data(self.r.path,n,min(self.r.scale,1.2));self.selection_text[n]=chars
+                chars=page_characters(self.r.path,n);self.selection_text[n]=chars
             if chars is None:continue
             result.append((n,chars[ia if n==a else 0:ib+1 if n==b else len(chars)]))
         return result

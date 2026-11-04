@@ -69,6 +69,9 @@ class SummaryView:
         entry=ttk.Entry(bar,textvariable=self.day,width=13);entry.pack(side='left',padx=6);entry.bind('<Return>',lambda _:self.set_custom_day())
         ttk.Button(bar,text='查看日期',style='Compact.TButton',command=self.set_custom_day).pack(side='left')
         ttk.Button(bar,text='导出',style='Compact.TButton',command=self.export).pack(side='right');ttk.Button(bar,text='复制总结',style='Compact.TButton',command=self.copy).pack(side='right',padx=6)
+        ttk.Button(bar,text='分享阅读回顾',style='Compact.TButton',command=self.share_recap).pack(side='right',padx=6)
+        from ui_widgets import flow_bar
+        flow_bar(bar)
         cards=ttk.Frame(self.review);cards.pack(fill='x');self.stats=[]
         for i,label in enumerate(('读过的文献','阅读时长','笔记与标记')):
             cards.columnconfigure(i,weight=1);card=ttk.Frame(cards,style='Card.TFrame',padding=(18,12));card.grid(row=0,column=i,sticky='nsew',padx=(0,10 if i<2 else 0))
@@ -77,7 +80,20 @@ class SummaryView:
         panes=ttk.Panedwindow(self.review,orient='horizontal');panes.pack(fill='both',expand=True);left=ttk.Frame(panes);right=ttk.Frame(panes);panes.add(left,weight=2);panes.add(right,weight=3)
         self.paper_tree=self._tree(left,{'title':'读过的研究','time':'阅读时长'},(300,115));self.paper_tree.bind('<<TreeviewSelect>>',lambda _:self._paper_detail());self.text=self._text(right)
         actions=ttk.Frame(self.review);actions.pack(fill='x',pady=(12,0));self.read_button=ttk.Button(actions,text='继续阅读',style='Accent.TButton',command=self._read_selected);self.read_button.pack(side='left')
+        self.share_paper_button=ttk.Button(actions,text='分享选中文献',command=self.share_paper);self.share_paper_button.pack(side='left',padx=8)
         ttk.Button(actions,text='阅读时间如何计算',style='Subtle.TButton',command=lambda:messagebox.showinfo('阅读时间','只计算文献打开、阅读页面在你面前的时间。切到其他软件、打开总结或收起窗口时，计时会暂停。\n\n这是阅读停留时间，不代表已经理解或读完。笔记数量包含这些文献现有的笔记与标记。',parent=self.frame)).pack(side='right')
+        flow_bar(actions)
+
+    def share_recap(self):
+        from reading_share_ui import ShareDialog
+        ShareDialog(self.frame,dict(self.data,kind='recap'))
+
+    def share_paper(self):
+        selected=self.paper_tree.selection()
+        if not selected:self.footer.set('请先选择要分享的文献。');return
+        from reading_share import paper_share_data
+        from reading_share_ui import ShareDialog
+        ShareDialog(self.frame,self._library(lambda lib:paper_share_data(lib,selected[0])))
     def set_day(self,delta,days=1):self.days=days;self.day.set((date.today()+timedelta(days=delta)).isoformat());self.refresh()
     def set_custom_day(self):self.days=1;self.refresh()
     def refresh(self):
@@ -92,7 +108,7 @@ class SummaryView:
         for p in self.data['papers']:self.paper_tree.insert('','end',iid=p['id'],values=(p['title'],duration(p['seconds'])))
         if self.papers:self.paper_tree.selection_set(next(iter(self.papers)));self._paper_detail()
         else:self._write(self.text,'这段时间还没有阅读记录。\n\n打开一篇感兴趣的文献，下一次回顾就从这里开始。\n\n也可以到“主题与检索”，看看课题中已经收藏的研究。')
-        self.read_button.configure(state='normal' if self.papers else 'disabled');self.refresh_topics();self._load_topics();self.citations.refresh()
+        self.read_button.configure(state='normal' if self.papers else 'disabled');self.share_paper_button.configure(state='normal' if self.papers else 'disabled');self.refresh_topics();self._load_topics();self.citations.refresh()
     def _paper_detail(self):
         selection=self.paper_tree.selection()
         if not selection:return

@@ -236,7 +236,7 @@ class LibraryWindow(SmartViewsMixin):
 
     def refresh_records(self):
         if self._search_job:self.win.after_cancel(self._search_job);self._search_job=None
-        selected=set(self.tree.selection());self.tree.delete(*self.tree.get_children())
+        displayed=[]
         query=self.search.get().lower()
         scope_name=self.library.project(self.current_project)['name'] if self.current_project else '全部文献'
         self.scope_title.set(scope_name if len(scope_name)<=30 else scope_name[:29]+'…')
@@ -258,9 +258,11 @@ class LibraryWindow(SmartViewsMixin):
             if self.rating_filter.get()=='未评分' and rating:continue
             if '星及以上' in self.rating_filter.get() and rating<int(self.rating_filter.get()[0]):continue
             if self.tag_filter.get()!='全部标签' and self.tag_filter.get() not in r.get('tags',[]):continue
-            self.tree.insert('','end',iid=r['id'],values=(display_name(r),r['year'],projects.get(r['primary_project'],'未分类'),'；'.join(r.get('tags',[])),r['status'],'★'*rating or '未评分','已归档' if any(a.get('role')=='primary' for a in readable_attachments(r)) else '待添加'),tags=('odd' if index%2 else 'even','read' if r['status']=='已读' else ''))
+            displayed.append((r['id'],(display_name(r),r['year'],projects.get(r['primary_project'],'未分类'),'；'.join(r.get('tags',[])),r['status'],'★'*rating or '未评分','已归档' if any(a.get('role')=='primary' for a in readable_attachments(r)) else '待添加'),('odd' if index%2 else 'even','read' if r['status']=='已读' else '')))
             index+=1
-            if r['id'] in selected:self.tree.selection_add(r['id'])
+
+        from library_table import sync_rows
+        self._displayed_rows=sync_rows(self.tree,displayed,getattr(self,'_displayed_rows',{}))
 
         from library_table import LABELS
         for key,label in LABELS.items():
@@ -472,7 +474,7 @@ class LibraryWindow(SmartViewsMixin):
 
     def undo_import(self):
         if self.busy:return
-        row=self.library.latest_import()
+        row=self.library.latest_import(include_entries=False)
         if not row:self.status.set('没有可以撤回的导入记录。');return
         if not messagebox.askyesno('撤回最近一次导入','撤回最近一批导入？原文件会保留；导入后已经编辑、阅读或新增笔记的文献也会保留。',parent=self.win):return
         self.run('正在撤回导入',lambda lib:lib.undo_import(row['id']),lambda r:self.status.set(f"已撤回 {r['restored']} 项；保留导入后有变化的 {r['kept']} 篇文献。"))

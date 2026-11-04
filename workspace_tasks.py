@@ -97,13 +97,22 @@ class TaskManager:
             self._events[task_id] = threading.Event()
             try:
                 self._save()
-                self._futures[task_id] = self.executor.submit(self._run, task_id)
+                future=self.executor.submit(self._run, task_id)
+                self._futures[task_id]=future
+                future.add_done_callback(lambda completed,identifier=task_id:self._release_success(identifier,completed))
             except Exception as exc:
                 self._tasks[task_id].update(status='failed', message='任务未能提交，修复保存位置后可重试',
                                            error='任务未能提交：' + str(exc), updated=time.time())
                 self._persist_or_note(self._tasks[task_id])
                 raise RuntimeError('任务未能提交：' + str(exc)) from exc
             return task_id
+
+    def _release_success(self, task_id, future):
+        """After execution ends, release captured widgets/files from successful jobs."""
+        with self.lock:
+            if self._futures.get(task_id) is not future or self._tasks[task_id]['status']!='succeeded':return
+            for collection in (self._workers,self._retry,self._events,self._futures):collection.pop(task_id,None)
+            getattr(self,'_last_save',{}).pop(task_id,None)
 
     def _run(self, task_id):
         with self.lock:
@@ -150,17 +159,30 @@ class TaskManager:
                 self._last_save[task_id] = now
                 self._save()
 
-    def list_tasks(self):
+    def _task_snapshot(self, task):
+        task=deepcopy(task)
+        task['can_cancel'] = task['status'] in self.ACTIVE and task.get('metadata', {}).get('cancellable', True) is not False
+        task['can_retry'] = task.get('metadata', {}).get('retryable', True) is not False and task['status'] in self.RETRYABLE and (
+            task['id'] in self._retry or task['kind'] in self._retry_factories)
+        return task
+
+    def list_tasks(self, limit=None, offset=0):
         with self.lock:
-            result = deepcopy(sorted(self._tasks.values(), key=lambda item: item['created'], reverse=True))
-            for task in result:
-                task['can_cancel'] = task['status'] in self.ACTIVE and task.get('metadata', {}).get('cancellable', True) is not False
-                task['can_retry'] = task.get('metadata', {}).get('retryable', True) is not False and task['status'] in self.RETRYABLE and (
-                    task['id'] in self._retry or task['kind'] in self._retry_factories)
-            return result
+            rows=sorted(self._tasks.values(),key=lambda item:item['created'],reverse=True)
+            offset=max(0,int(offset))
+            rows=rows[offset:] if limit is None else rows[offset:offset+max(0,int(limit))]
+            return [self._task_snapshot(task) for task in rows]
+
+    def task_count(self):
+        with self.lock:return len(self._tasks)
+
+    def has_active_tasks(self):
+        with self.lock:return any(task['status'] in self.ACTIVE for task in self._tasks.values())
 
     def get_task(self, task_id):
-        return next((task for task in self.list_tasks() if task['id'] == task_id), None)
+        with self.lock:
+            task=self._tasks.get(task_id)
+            return self._task_snapshot(task) if task is not None else None
 
     def cancel(self, task_id):
         with self.lock:

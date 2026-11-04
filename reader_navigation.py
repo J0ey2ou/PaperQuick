@@ -3,6 +3,9 @@ import json
 import queue
 import re
 import threading
+from collections import OrderedDict
+from copy import deepcopy
+from pdf_reader_core import file_version, DocumentReadCancelled
 from urllib.parse import urlencode
 from urllib.request import urlopen
 import tkinter as tk
@@ -20,20 +23,55 @@ def text_headings(text):
     return result[:1000]
 
 
-def pdf_outline(path):
+_outline_cache=OrderedDict()
+_outline_lock=threading.RLock()
+
+
+def clear_outline_cache():
+    with _outline_lock:_outline_cache.clear()
+
+
+def _check_cancelled(cancelled):
+    if cancelled and cancelled():raise DocumentReadCancelled()
+
+
+def pdf_outline(path, cancelled=None):
+    # File-like fixtures remain supported; real files reuse outlines, including
+    # empty results, until the file version changes. Never share mutable items.
+    _check_cancelled(cancelled);version=file_version(path)
+    if version is not None:
+        with _outline_lock:
+            if version in _outline_cache:
+                _outline_cache.move_to_end(version)
+                return deepcopy(_outline_cache[version])
+    result=_read_pdf_outline(path,cancelled)
+    _check_cancelled(cancelled)
+    if version is not None:
+        if file_version(path)!=version:
+            raise ValueError('文档在读取时已改变，请重新打开。')
+        with _outline_lock:
+            _outline_cache[version]=deepcopy(result)
+            while len(_outline_cache)>32:_outline_cache.popitem(last=False)
+    return result
+
+
+def _read_pdf_outline(path, cancelled=None):
     from pypdf import PdfReader
     reader=PdfReader(path); result=[]
     def walk(items, level=0):
         for item in items:
+            _check_cancelled(cancelled)
             if isinstance(item,list):walk(item,level+1);continue
             try:
                 page=reader.get_destination_page_number(item)
                 if page is not None and page>=0:result.append({'title':str(item.title),'page':page,'level':level})
             except (AttributeError,ValueError,KeyError,TypeError):continue
     try:walk(reader.outline)
+    except DocumentReadCancelled:raise
     except Exception:pass
     if result:return result
     for page_no,page in enumerate(reader.pages):
+        _check_cancelled(cancelled)
         try:headings=text_headings(page.extract_text() or '')
         except Exception:continue
         for item in headings:result.append({'title':item['title'],'page':page_no,'level':0})
@@ -59,13 +97,14 @@ class ReaderNavigation:
         self.hint=tk.StringVar(value='打开文档后自动识别目录。')
         ttk.Label(tab,textvariable=self.hint,wraplength=280).pack(fill='x')
         self.tree=ttk.Treeview(tab,show='tree',height=9);self.tree.pack(fill='both',expand=True,pady=4);self.tree.bind('<Double-1>',self.goto_outline);self.tree.bind('<Return>',self.goto_outline)
-        row=ttk.Frame(tab);row.pack(fill='x');ttk.Label(row,text='自定义页面标签').pack(side='left');ttk.Button(row,text='添加当前位置',command=self.add_label).pack(side='right')
+        from ui_widgets import flow_bar
+        row=ttk.Frame(tab);row.pack(fill='x');flow_bar(row);ttk.Label(row,text='自定义页面标签').pack(side='left');ttk.Button(row,text='添加当前位置',command=self.add_label).pack(side='right')
         self.list=ttk.Treeview(tab,columns=('location',),show='tree headings',height=6);self.list.heading('#0',text='标签');self.list.heading('location',text='位置');self.list.column('#0',width=130);self.list.column('location',width=75);self.list.pack(fill='both',expand=True,pady=4);self.list.bind('<Double-1>',self.goto_label);self.list.bind('<Return>',self.goto_label)
-        row=ttk.Frame(tab);row.pack(fill='x');ttk.Button(row,text='跳转',command=self.goto_label).pack(side='left');ttk.Button(row,text='重命名',command=self.rename_label).pack(side='left',padx=4);ttk.Button(row,text='删除',command=self.delete_label).pack(side='left')
+        row=ttk.Frame(tab);row.pack(fill='x');flow_bar(row);ttk.Button(row,text='跳转',command=self.goto_label).pack(side='left');ttk.Button(row,text='重命名',command=self.rename_label).pack(side='left',padx=4);ttk.Button(row,text='删除',command=self.delete_label).pack(side='left')
         self.frame=ttk.Frame(reader.notebook,padding=6);reader.notebook.add(self.frame,text='翻译')
         ttk.Label(self.frame,text='选文翻译 · MyMemory 免费服务',wraplength=280).pack(anchor='w')
         ttk.Label(self.frame,text='选文将发送至第三方；请勿发送敏感内容。匿名免费额度有限。',wraplength=280).pack(fill='x',pady=5)
-        row=ttk.Frame(self.frame);row.pack(fill='x');self.pair=tk.StringVar(value='英语 → 中文');ttk.Combobox(row,textvariable=self.pair,values=['英语 → 中文','中文 → 英语','日语 → 中文','法语 → 中文','德语 → 中文'],state='readonly',width=16).pack(side='left');ttk.Button(row,text='翻译',command=self.send).pack(side='right')
+        row=ttk.Frame(self.frame);row.pack(fill='x');flow_bar(row);self.pair=tk.StringVar(value='英语 → 中文');ttk.Combobox(row,textvariable=self.pair,values=['英语 → 中文','中文 → 英语','日语 → 中文','法语 → 中文','德语 → 中文'],state='readonly',width=16).pack(side='left');ttk.Button(row,text='翻译',command=self.send).pack(side='right')
         ttk.Label(self.frame,text='原文（可编辑）').pack(anchor='w');self.source=tk.Text(self.frame,height=5,wrap='word',exportselection=False);self.source.pack(fill='x')
         ttk.Label(self.frame,text='译文').pack(anchor='w',pady=(8,0));self.answer=tk.Text(self.frame,height=9,wrap='word',exportselection=False);self.answer.pack(fill='both',expand=True)
         self.status=tk.StringVar(value='在文中选中文字，右键选择“翻译选中文字”。');ttk.Label(self.frame,textvariable=self.status,wraplength=280).pack(fill='x',pady=5)

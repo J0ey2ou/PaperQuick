@@ -14,6 +14,26 @@ def values(record,projects):
             'pdf':'已归档' if any(a.get('role')=='primary' for a in readable_attachments(record)) else '待添加'}
 
 
+def sync_rows(tree, rows, previous):
+    """Apply a filtered/sorted result without rebuilding unchanged Tk items."""
+    wanted = {rid for rid, _, _ in rows}
+    current = tuple(tree.get_children())
+    removed = [rid for rid in current if rid not in wanted]
+    if removed:tree.delete(*removed)
+    present = set(current) - set(removed)
+    order_changed = tuple(rid for rid in current if rid in wanted) != tuple(rid for rid, _, _ in rows)
+    updated = {}
+    for index, (rid, cells, tags) in enumerate(rows):
+        state = (cells, tags)
+        if rid not in present:
+            tree.insert('', index, iid=rid, values=cells, tags=tags)
+        else:
+            if previous.get(rid) != state:tree.item(rid, values=cells, tags=tags)
+            if order_changed:tree.move(rid, '', index)
+        updated[rid] = state
+    return updated
+
+
 class TableState:
     def __init__(self):self.sort_key=None;self.descending=False;self.filters={}
 

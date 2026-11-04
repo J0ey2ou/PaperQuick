@@ -12,6 +12,8 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('--bundle-check',type=Path,default=BASE/'build'/('v'+VERSION.replace('.','')+'-bundle-check.json'));parser.add_argument('--prerelease',action='store_true');args=parser.parse_args()
     report=json.loads(args.bundle_check.read_text('utf-8'))
     assert report['passed'] and report['frozen'] and report['version']==VERSION
+    if report.get('binary_sha256'):
+        assert hashlib.sha256((built/'PaperQuick.exe').read_bytes()).hexdigest()==report['binary_sha256'],'Build changed after verification'
     files={p.relative_to(BASE).as_posix():p for p in application_files()}
     extension=json.loads((BASE/'browser-extension/manifest.json').read_text('utf-8'))
     required={path for script in extension.get('content_scripts',[]) for path in script.get('js',[])+script.get('css',[])}

@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import webbrowser
 from library_core import Library
-from pdf_reader_core import document_info, render_page
+from pdf_reader_core import document_info, render_page, prepare_page, file_version
 from ui_theme import FONT, MUTED, style_dialog
 
 READABLE = {'pdf', 'doc', 'docx', 'word', 'txt', 'md'}
@@ -162,16 +162,15 @@ class AttachmentReader:
     """Use the same editable reader for supplements, with an independent location."""
     def __init__(self,parent,owner,on_close):
         from reader_ui import ReaderPage
-        self.owner=owner;self.frame=ttk.Frame(parent,style='Card.TFrame',padding=8)
-        header=ttk.Frame(self.frame);header.pack(fill='x')
-        ttk.Label(header,text='附件阅读与编辑',font=(FONT,12,'bold')).pack(side='left')
+        self.owner=owner;self.frame=ttk.Frame(parent,style='Card.TFrame',padding=5)
+        header=ttk.Frame(self.frame);self.header=header;header.pack(fill='x',pady=(0,3))
         ttk.Button(header,text='收起',command=on_close,style='Compact.TButton').pack(side='right')
         ttk.Button(header,text='编辑原文',command=lambda:self.reader.edit_document(),style='Compact.TButton').pack(side='right',padx=(0,6))
         self.choice=tk.StringVar();self.items=[]
-        self.combo=ttk.Combobox(self.frame,textvariable=self.choice,state='readonly');self.combo.pack(fill='x',pady=6)
+        self.combo=ttk.Combobox(header,textvariable=self.choice,state='readonly',width=1);self.combo.pack(side='left',fill='x',expand=True,padx=(0,5))
         self.combo.bind('<<ComboboxSelected>>',self.choose)
-        self.reader=ReaderPage(self.frame,owner.directory,owner.on_query,owner.on_collect)
-        self.reader.frame.pack(fill='both',expand=True);self.reader.header.pack_forget()
+        self.reader=ReaderPage(self.frame,owner.directory,owner.on_query,owner.on_collect,compact=True)
+        self.reader.frame.pack(fill='both',expand=True)
         for name in ('on_library_changed','on_open_related','on_evidence','task_manager'):
             if hasattr(owner,name):setattr(self.reader,name,getattr(owner,name))
         self.reader.note_peers=[owner]
@@ -192,13 +191,20 @@ class AttachmentReader:
 
     def choose(self,_=None):
         index=self.combo.current()
-        if 0<=index<len(self.items):self.open(self.items[index])
+        if 0<=index<len(self.items):
+            try:self.open(self.items[index])
+            except (ValueError,OSError) as exc:
+                self.reader.status.set(str(exc));self.restore_choice()
+
+    def restore_choice(self):
+        index=next((i for i,item in enumerate(self.items) if item['id']==self.reader.attachment_id),None)
+        if index is not None:self.combo.current(index)
 
     def open(self,item):
         self.owner.save_notes()
         self.reader.open(item.get('paper') or self.owner.rid,record_read=False,attachment_id=item['id'],resume=False)
-        if self.reader.notes_visible:self.reader.toggle_notes()
-        self.reader.status.set('附件支持右键笔记、批注、引用、链接和原文编辑；正文与附件独立翻页。')
+        self.restore_choice()
+        return self.reader.attachment_id==item['id']
 
     def close(self):
         if self.reader.closed:return True
@@ -268,6 +274,9 @@ class AttachmentPreview:
         self.document_canvas.reset()
         self.status.set('正在准备附件预览…');self.canvas.delete('all');self.page_label.set('正在打开…')
         preview_done=threading.Event()
+        viewport_width=self.canvas.winfo_width()-40 if self.canvas.winfo_width()>100 else 0
+        scale=self.scale
+        if viewport_width:self.fit_pending=False
         if source.suffix.lower() in ('.doc','.docx') and self.on_preview_start:self.on_preview_start(preview_done)
         def work():
             try:
@@ -277,8 +286,8 @@ class AttachmentPreview:
                 from document_conversion import preview_pdf
                 try:path=preview_pdf(source,self.directory/'cache'/'document-previews')
                 finally:preview_done.set()
-                from pdf_reader_core import render_page_data,page_sizes
-                count=document_info(path);image,chars=render_page_data(path,0,self.scale);self.events.put(('open',generation,(path,count,image,chars,page_sizes(path))))
+                prepared=prepare_page(path,0,scale,fit_width=viewport_width,min_scale=.2)
+                self.events.put(('open',generation,(path,*prepared)))
             except Exception as exc:preview_done.set();self.events.put(('error',generation,str(exc)))
         threading.Thread(target=work,daemon=True).start()
 
@@ -300,6 +309,7 @@ class AttachmentPreview:
 
     def render(self):
         if self.loading or not self.path:return
+        self.document_canvas.render_queue.cancel()
         if self.rid:
             lib=Library(self.directory)
             try:
@@ -310,9 +320,7 @@ class AttachmentPreview:
         self.loading=True;generation=self.generation;page=self.page;scale=self.scale;path=self.path
         def work():
             try:
-                from pdf_reader_core import render_page_data,page_sizes
-                image,chars=render_page_data(path,page,scale)
-                self.events.put(('page',generation,(page,image,chars,page_sizes(path),scale)))
+                self.events.put(('page',generation,prepare_page(path,page,scale,min_scale=.2)))
             except Exception as exc:self.events.put(('error',generation,str(exc)))
         threading.Thread(target=work,daemon=True).start()
 
@@ -349,13 +357,15 @@ class AttachmentPreview:
                 if self.text_display:self.text_display.pack_forget()
                 self.vertical_scroll.configure(command=self.canvas.yview)
                 self.canvas.pack(fill='both',expand=True)
-                if kind=='open':self.path,self.count,image,chars,sizes=value;self.page=0
-                else:
-                    page,image,chars,sizes,scale=value
-                    if scale!=self.scale:continue
-                    self.page=page
+                path=value[0] if kind=='open' else self.path
+                version=value[-1]
+                if version is not None and file_version(path)!=version:
+                    self.generation+=1
+                    self.status.set('附件已改变，请重新选择以刷新页面。');continue
+                if kind=='open':self.path=path;value=value[1:]
+                self.count,self.page,image,chars,sizes,self.scale,_=value
                 self.image_size=(image.width,image.height)
-                self.document_canvas.adopt(self.path,self.page,self.count,image,chars,sizes)
+                self.document_canvas.adopt(self.path,self.page,self.count,image,chars,sizes,version)
                 self.page_input.set(str(self.page+1));self.page_label.set(f'第 {self.page+1} / {self.count} 页'+(' · 连续阅读' if self.continuous.get() else ''))
                 self.status.set('向下滚动接着阅读下一页 · 附件与正文独立' if self.continuous.get() else '独立分页阅读 · 可切换连续阅读')
                 if self.fit_pending:self.fit_pending=False;self.fit_width()

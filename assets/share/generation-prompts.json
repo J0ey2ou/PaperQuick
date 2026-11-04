@@ -1,0 +1,11 @@
+{
+  "tool": "built-in image_gen",
+  "assets": [
+    "reading-garden.png",
+    "reading-night.png"
+  ],
+  "prompts": [
+    "Use case: illustration-story. Asset type: reusable editorial artwork for PaperQuick local research reading share cards. Create one refined wide 3:2 illustration: a sculptural open book with gently flowing cream pages forming a small horizon, an elegant sage-green botanical sprig and a softly glowing amber sun, small abstract ink-blue paper sheets floating nearby. Matte paper-cut collage with subtle natural paper texture and soft dimensional shadows, premium quiet literary magazine aesthetic, warm ivory background, restrained sage forest green and antique gold palette. Composition keeps the upper-left and center spacious, objects concentrated on lower-right. No people, no letters, no text, no numbers, no logos, no watermark, no chart or fabricated scientific data. Artwork must look beautiful at a small card-header size, calm sophisticated minimalism.",
+    "Use case: illustration-story. Asset type: second reusable editorial header artwork for PaperQuick research reading share cards, paired with a warm paper-cut open-book illustration. Primary request: a beautiful quiet nocturnal study metaphor, layered sculptural ivory pages flowing like an ocean under a small warm silver moon, a slim brass bookmark and a tiny sage branch, minimal abstract indigo paper shapes. Premium matte paper-cut editorial collage, subtle paper grain, soft studio shadows. Wide 3:2 composition, rich midnight navy and desaturated blue with restrained ivory and warm gold, main details lower-right, plenty of calm dark negative space upper-left for later typeset title. No people, no text, no letters, no logos, no watermark, no charts or fabricated scientific data. Sophisticated literary calm, crisp elegant shapes, beautiful even as a small card header."
+  ]
+}

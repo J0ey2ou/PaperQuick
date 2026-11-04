@@ -63,6 +63,7 @@ def application_files():
     files += [BASE / 'docs' / 'images' / name for name in REQUIRED_IMAGES]
     files += [p for p in (BASE / 'docs' / 'images').rglob('*') if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES]
     files += [p for p in (BASE / 'assets').glob('*') if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES]
+    files += [p for p in (BASE / 'assets' / 'share').glob('*.png') if p.is_file()]
     # Node and both compiled helpers already live inside the application EXE.
     # Keep accessible licenses, upstream source, styles/locales and attribution.
     files += [BASE / 'word-integration' / 'vendor' / name for name in VENDOR_FILES]

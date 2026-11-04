@@ -2,6 +2,7 @@
 from pathlib import Path, PurePosixPath
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -116,6 +117,45 @@ def hash_file(path):
     return digest.hexdigest()
 
 
+def _write_install_result(path, result):
+    path=Path(path);temporary=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp')
+    try:
+        with temporary.open('x',encoding='utf-8') as stream:
+            json.dump(result,stream,ensure_ascii=False);stream.flush();os.fsync(stream.fileno())
+        os.replace(temporary,path)
+    finally:temporary.unlink(missing_ok=True)
+
+
+def latest_install_result(root):
+    """Read local installer receipts only, including reports from older clients."""
+    directory=Path(root).resolve()/'.updates'
+    try:candidates=[directory/'latest-result.json',*directory.glob('*/result.json')]
+    except OSError:return None
+    reports=[]
+    for path in candidates:
+        try:
+            if not path.resolve().is_relative_to(directory) or path.stat().st_size>65536:continue
+            raw=path.read_bytes();data=json.loads(raw)
+            if not isinstance(data,dict) or data.get('state') not in ('installed','failed'):continue
+            version=str(data.get('version') or '')
+            if not version and path.name=='result.json':
+                plan_path=path.parent/'plan.json'
+                try:
+                    if plan_path.resolve().is_relative_to(directory) and plan_path.stat().st_size<=2*1024*1024:
+                        plan=json.loads(plan_path.read_text('utf-8'))
+                        version=str(plan.get('version') or '') if isinstance(plan,dict) else ''
+                except (OSError,ValueError):pass
+            if version:version_tuple(version)
+            completed=float(data.get('completed_at') or path.stat().st_mtime)
+            if not math.isfinite(completed) or not 0<=completed<=time.time()+86400:continue
+            error=str(data.get('error') or '')[:2000]
+            identity=hashlib.sha256(json.dumps([data['state'],version,completed,
+                data.get('attempt_id',path.parent.name),error],ensure_ascii=False).encode('utf-8')).hexdigest()
+            reports.append(dict(state=data['state'],version=version,completed_at=completed,error=error,id=identity))
+        except (OSError,ValueError,TypeError):continue
+    return max(reports,key=lambda report:report['completed_at'],default=None)
+
+
 def stage_archive(archive_path, install_root, release):
     root=Path(install_root).resolve();archive_path=Path(archive_path).resolve()
     if archive_path.parent.parent.name!='.updates' or archive_path.parent.parent.parent!=root:
@@ -205,12 +245,16 @@ def apply_staged(plan_path, replace=os.replace):
         raise
     finally:
         for temporary,_,_ in prepared:temporary.unlink(missing_ok=True)
-    result={'version':plan['version'],'state':'installed','files':len(written),'user_data_modified':False}
-    (root/'.updates'/'latest-result.json').write_text(json.dumps(result,ensure_ascii=False),'utf-8');return result
+    result={'schema':1,'version':plan['version'],'state':'installed','files':len(written),'user_data_modified':False,
+            'completed_at':time.time(),'attempt_id':stage.name}
+    try:_write_install_result(root/'.updates'/'latest-result.json',result)
+    except OSError as exc:result['report_error']='安装已完成，但结果记录未能保存：'+str(exc)
+    return result
 
 
 def installer_main(plan_path):
     plan_path=Path(plan_path).resolve()
+    plan={}
     try:
         plan=json.loads(plan_path.read_text('utf-8'))
         # Hold a process handle so PID reuse cannot mistake another process for the parent.
@@ -230,6 +274,9 @@ def installer_main(plan_path):
                 if attempt==11:raise
                 time.sleep(5)
     except Exception as exc:
-        report={'state':'failed','error':str(exc),'user_data_modified':False}
-        (plan_path.parent/'result.json').write_text(json.dumps(report,ensure_ascii=False),'utf-8')
+        report={'schema':1,'state':'failed','error':str(exc),'user_data_modified':False,
+                'version':str(plan.get('version') or '') if isinstance(plan,dict) else '',
+                'completed_at':time.time(),'attempt_id':plan_path.parent.name}
+        try:_write_install_result(plan_path.parent/'result.json',report)
+        except OSError:pass
         return report
